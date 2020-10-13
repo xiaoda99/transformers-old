@@ -532,6 +532,7 @@ class Trainer:
         train_iterator = trange(
             epochs_trained, int(num_train_epochs), desc="Epoch", disable=not self.is_local_process_zero()
         )
+#         self.evaluate()  # XD
         for epoch in train_iterator:
             if isinstance(train_dataloader, DataLoader) and isinstance(train_dataloader.sampler, DistributedSampler):
                 train_dataloader.sampler.set_epoch(epoch)
@@ -641,7 +642,8 @@ class Trainer:
                         "You enabled PyTorch/XLA debug metrics but you don't have a TPU "
                         "configured. Check your training configuration if this is unexpected."
                     )
-
+        
+        self.evaluate()  # XD
         if self.tb_writer:
             self.tb_writer.close()
         if self.args.past_index and hasattr(self, "_past"):
@@ -974,10 +976,11 @@ class Trainer:
         # inside a DistributedDataParallel as we'll be under `no_grad` anyways.
 
         batch_size = dataloader.batch_size
-        logger.info("***** Running %s *****", description)
-        logger.info("  Num examples = %d", self.num_examples(dataloader))
-        logger.info("  Batch size = %d", batch_size)
+# XD        logger.info("***** Running %s *****", description)
+# XD        logger.info("  Num examples = %d", self.num_examples(dataloader))
+# XD        logger.info("  Batch size = %d", batch_size)
         eval_losses: List[float] = []
+        accuracies: List[float] = []  # XD
         preds: torch.Tensor = None
         label_ids: torch.Tensor = None
         model.eval()
@@ -990,6 +993,14 @@ class Trainer:
 
         for inputs in tqdm(dataloader, desc=description):
             loss, logits, labels = self.prediction_step(model, inputs, prediction_loss_only)
+            # XD
+            mask = inputs['labels'] != -100
+            pred_labels = (logits * mask.unsqueeze(-1)).sum(dim=1).argmax(dim=-1)
+            labels = (inputs['labels'] * mask).sum(dim=-1)
+            acc = (pred_labels == labels).float().mean().item()
+            accuracies.append(acc)
+            logits, labels = None, None
+            
             if loss is not None:
                 eval_losses.append(loss)
             if logits is not None:
@@ -1026,6 +1037,7 @@ class Trainer:
             metrics = {}
         if len(eval_losses) > 0:
             metrics["eval_loss"] = np.mean(eval_losses)
+            metrics["accuracy"] = np.mean(accuracies)  # XD
 
         # Prefix all keys with eval_
         for key in list(metrics.keys()):

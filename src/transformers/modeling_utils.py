@@ -313,6 +313,7 @@ class ModuleUtilsMixin:
 
 
 class PreTrainedModel(nn.Module, ModuleUtilsMixin, GenerationMixin):
+    state_dict = {}  # XD
     r"""
     Base class for all models.
 
@@ -580,7 +581,7 @@ class PreTrainedModel(nn.Module, ModuleUtilsMixin, GenerationMixin):
         logger.info("Model weights saved in {}".format(output_model_file))
 
     @classmethod
-    def from_pretrained(cls, pretrained_model_name_or_path, *model_args, **kwargs):
+    def from_pretrained(cls, pretrained_model_name_or_path, model, *model_args, **kwargs):  # XD: add model arg
         r"""
         Instantiate a pretrained pytorch model from a pre-trained model configuration.
 
@@ -697,91 +698,96 @@ class PreTrainedModel(nn.Module, ModuleUtilsMixin, GenerationMixin):
         local_files_only = kwargs.pop("local_files_only", False)
         use_cdn = kwargs.pop("use_cdn", True)
 
-        # Load config if we don't provide a configuration
-        if not isinstance(config, PretrainedConfig):
-            config_path = config if config is not None else pretrained_model_name_or_path
-            config, model_kwargs = cls.config_class.from_pretrained(
-                config_path,
-                *model_args,
-                cache_dir=cache_dir,
-                return_unused_kwargs=True,
-                force_download=force_download,
-                resume_download=resume_download,
-                proxies=proxies,
-                local_files_only=local_files_only,
-                **kwargs,
-            )
-        else:
-            model_kwargs = kwargs
-
-        # Load model
-        if pretrained_model_name_or_path is not None:
-            if os.path.isdir(pretrained_model_name_or_path):
-                if from_tf and os.path.isfile(os.path.join(pretrained_model_name_or_path, TF_WEIGHTS_NAME + ".index")):
-                    # Load from a TF 1.0 checkpoint
-                    archive_file = os.path.join(pretrained_model_name_or_path, TF_WEIGHTS_NAME + ".index")
-                elif from_tf and os.path.isfile(os.path.join(pretrained_model_name_or_path, TF2_WEIGHTS_NAME)):
-                    # Load from a TF 2.0 checkpoint
-                    archive_file = os.path.join(pretrained_model_name_or_path, TF2_WEIGHTS_NAME)
-                elif os.path.isfile(os.path.join(pretrained_model_name_or_path, WEIGHTS_NAME)):
-                    # Load from a PyTorch checkpoint
-                    archive_file = os.path.join(pretrained_model_name_or_path, WEIGHTS_NAME)
-                else:
-                    raise EnvironmentError(
-                        "Error no file named {} found in directory {} or `from_tf` set to False".format(
-                            [WEIGHTS_NAME, TF2_WEIGHTS_NAME, TF_WEIGHTS_NAME + ".index"],
-                            pretrained_model_name_or_path,
-                        )
-                    )
-            elif os.path.isfile(pretrained_model_name_or_path) or is_remote_url(pretrained_model_name_or_path):
-                archive_file = pretrained_model_name_or_path
-            elif os.path.isfile(pretrained_model_name_or_path + ".index"):
-                assert (
-                    from_tf
-                ), "We found a TensorFlow checkpoint at {}, please set from_tf to True to load from this checkpoint".format(
-                    pretrained_model_name_or_path + ".index"
-                )
-                archive_file = pretrained_model_name_or_path + ".index"
-            else:
-                archive_file = hf_bucket_url(
-                    pretrained_model_name_or_path,
-                    filename=(TF2_WEIGHTS_NAME if from_tf else WEIGHTS_NAME),
-                    use_cdn=use_cdn,
-                )
-
-            try:
-                # Load from URL or cache if already cached
-                resolved_archive_file = cached_path(
-                    archive_file,
+        if model is None:  # XD: config and model loading stuff can be skipped
+            # Load config if we don't provide a configuration
+            if not isinstance(config, PretrainedConfig):
+                config_path = config if config is not None else pretrained_model_name_or_path
+                config, model_kwargs = cls.config_class.from_pretrained(
+                    config_path,
+                    *model_args,
                     cache_dir=cache_dir,
+                    return_unused_kwargs=True,
                     force_download=force_download,
-                    proxies=proxies,
                     resume_download=resume_download,
+                    proxies=proxies,
                     local_files_only=local_files_only,
+                    **kwargs,
                 )
-                if resolved_archive_file is None:
-                    raise EnvironmentError
-            except EnvironmentError:
-                msg = (
-                    f"Can't load weights for '{pretrained_model_name_or_path}'. Make sure that:\n\n"
-                    f"- '{pretrained_model_name_or_path}' is a correct model identifier listed on 'https://huggingface.co/models'\n\n"
-                    f"- or '{pretrained_model_name_or_path}' is the correct path to a directory containing a file named one of {WEIGHTS_NAME}, {TF2_WEIGHTS_NAME}, {TF_WEIGHTS_NAME}.\n\n"
-                )
-                raise EnvironmentError(msg)
-
-            if resolved_archive_file == archive_file:
-                logger.info("loading weights file {}".format(archive_file))
             else:
-                logger.info("loading weights file {} from cache at {}".format(archive_file, resolved_archive_file))
-        else:
-            resolved_archive_file = None
+                model_kwargs = kwargs
 
-        # Instantiate model.
-        model = cls(config, *model_args, **model_kwargs)
+            # Load model
+            if pretrained_model_name_or_path is not None:
+                if os.path.isdir(pretrained_model_name_or_path):
+                    if from_tf and os.path.isfile(os.path.join(pretrained_model_name_or_path, TF_WEIGHTS_NAME + ".index")):
+                        # Load from a TF 1.0 checkpoint
+                        archive_file = os.path.join(pretrained_model_name_or_path, TF_WEIGHTS_NAME + ".index")
+                    elif from_tf and os.path.isfile(os.path.join(pretrained_model_name_or_path, TF2_WEIGHTS_NAME)):
+                        # Load from a TF 2.0 checkpoint
+                        archive_file = os.path.join(pretrained_model_name_or_path, TF2_WEIGHTS_NAME)
+                    elif os.path.isfile(os.path.join(pretrained_model_name_or_path, WEIGHTS_NAME)):
+                        # Load from a PyTorch checkpoint
+                        archive_file = os.path.join(pretrained_model_name_or_path, WEIGHTS_NAME)
+                    else:
+                        raise EnvironmentError(
+                            "Error no file named {} found in directory {} or `from_tf` set to False".format(
+                                [WEIGHTS_NAME, TF2_WEIGHTS_NAME, TF_WEIGHTS_NAME + ".index"],
+                                pretrained_model_name_or_path,
+                            )
+                        )
+                elif os.path.isfile(pretrained_model_name_or_path) or is_remote_url(pretrained_model_name_or_path):
+                    archive_file = pretrained_model_name_or_path
+                elif os.path.isfile(pretrained_model_name_or_path + ".index"):
+                    assert (
+                        from_tf
+                    ), "We found a TensorFlow checkpoint at {}, please set from_tf to True to load from this checkpoint".format(
+                        pretrained_model_name_or_path + ".index"
+                    )
+                    archive_file = pretrained_model_name_or_path + ".index"
+                else:
+                    archive_file = hf_bucket_url(
+                        pretrained_model_name_or_path,
+                        filename=(TF2_WEIGHTS_NAME if from_tf else WEIGHTS_NAME),
+                        use_cdn=use_cdn,
+                    )
 
+                try:
+                    # Load from URL or cache if already cached
+                    resolved_archive_file = cached_path(
+                        archive_file,
+                        cache_dir=cache_dir,
+                        force_download=force_download,
+                        proxies=proxies,
+                        resume_download=resume_download,
+                        local_files_only=local_files_only,
+                    )
+                    if resolved_archive_file is None:
+                        raise EnvironmentError
+                except EnvironmentError:
+                    msg = (
+                        f"Can't load weights for '{pretrained_model_name_or_path}'. Make sure that:\n\n"
+                        f"- '{pretrained_model_name_or_path}' is a correct model identifier listed on 'https://huggingface.co/models'\n\n"
+                        f"- or '{pretrained_model_name_or_path}' is the correct path to a directory containing a file named one of {WEIGHTS_NAME}, {TF2_WEIGHTS_NAME}, {TF_WEIGHTS_NAME}.\n\n"
+                    )
+                    raise EnvironmentError(msg)
+
+                if resolved_archive_file == archive_file:
+                    logger.info("loading weights file {}".format(archive_file))
+                else:
+                    logger.info("loading weights file {} from cache at {}".format(archive_file, resolved_archive_file))
+            else:
+                resolved_archive_file = None
+
+            # Instantiate model.
+            model = cls(config, *model_args, **model_kwargs)
+        
+        if pretrained_model_name_or_path in cls.state_dict: state_dict = cls.state_dict[pretrained_model_name_or_path]  # XD
         if state_dict is None and not from_tf:
             try:
+                from time import time; t0 = time()  # XD
                 state_dict = torch.load(resolved_archive_file, map_location="cpu")
+                print('loading state_dict took', round(time() - t0, 3), 'sec')  # XD
+                cls.state_dict[pretrained_model_name_or_path] = state_dict  # XD
             except Exception:
                 raise OSError(
                     "Unable to load weights from pytorch checkpoint file. "
