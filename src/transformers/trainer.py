@@ -701,6 +701,10 @@ class Trainer:
                 if experiment is not None:
                     experiment._log_metrics(logs, step=self.global_step, epoch=self.epoch, framework="transformers")
         output = {**logs, **{"step": self.global_step}}
+        # XD
+        for k, v in output.items():
+            if any(s in k for s in ["loss", "acc", "epoch"]):
+                output[k] = round(v, 3)
         if iterator is not None:
             iterator.write(output)
         else:
@@ -980,10 +984,14 @@ class Trainer:
 # XD        logger.info("  Num examples = %d", self.num_examples(dataloader))
 # XD        logger.info("  Batch size = %d", batch_size)
         eval_losses: List[float] = []
-        accuracies: List[float] = []  # XD
         preds: torch.Tensor = None
         label_ids: torch.Tensor = None
         model.eval()
+        # XD
+        from collections import defaultdict
+        import torch.nn.functional as F
+        accuracies, pred_probs = defaultdict(list), defaultdict(lambda: defaultdict(list))
+#         accuracies, pred_probs = [], defaultdict(list)
 
         if is_torch_tpu_available():
             dataloader = pl.ParallelLoader(dataloader, [self.args.device]).per_device_loader(self.args.device)
@@ -994,11 +1002,27 @@ class Trainer:
         for inputs in tqdm(dataloader, desc=description):
             loss, logits, labels = self.prediction_step(model, inputs, prediction_loss_only)
             # XD
-            mask = inputs['labels'] != -100
-            pred_labels = (logits * mask.unsqueeze(-1)).sum(dim=1).argmax(dim=-1)
-            labels = (inputs['labels'] * mask).sum(dim=-1)
-            acc = (pred_labels == labels).float().mean().item()
-            accuracies.append(acc)
+            bsz, seq_len, vocab_size = logits.size()
+            masks = inputs['labels'] != -100
+            n_mask = masks.sum(dim=-1)[0].item()
+            logits = logits.masked_select(masks.unsqueeze(-1)).view(bsz, n_mask, vocab_size)
+            probs = F.softmax(logits, dim=-1)
+            pred_labels = logits.argmax(dim=-1)
+            labels = inputs['labels'].masked_select(masks).view(bsz, n_mask)
+            for mask_id in range(n_mask):
+                acc = (pred_labels == labels)[:, mask_id].float().mean().item()
+                accuracies[mask_id].append(acc)
+                for i, pred_label_id in enumerate(pred_labels[:, mask_id]):
+                    pred_probs[mask_id][pred_label_id.item()].append(probs[i, mask_id, pred_label_id].item())
+                
+#             mask = inputs['labels'] != -100
+#             probs = F.softmax((logits * (inputs['labels'] != -100).unsqueeze(-1)).sum(dim=1), dim=-1)
+#             pred_labels = (logits * mask.unsqueeze(-1)).sum(dim=1).argmax(dim=-1)
+#             labels = (inputs['labels'] * mask).sum(dim=-1)
+#             acc = (pred_labels == labels).float().mean().item()
+#             accuracies.append(acc)
+#             for i, pred_label_id in enumerate(pred_labels):
+#                 pred_probs[pred_label_id.item()].append(probs[i, pred_label_id].item())
             logits, labels = None, None
             
             if loss is not None:
@@ -1037,7 +1061,23 @@ class Trainer:
             metrics = {}
         if len(eval_losses) > 0:
             metrics["eval_loss"] = np.mean(eval_losses)
-            metrics["accuracy"] = np.mean(accuracies)  # XD
+            # XD
+            for mask_id in range(len(accuracies)):
+                metrics["acc" + str(mask_id)] = np.mean(accuracies[mask_id])
+                total_preds = sum(len(probs) for probs in pred_probs[mask_id].values())
+                s = ""
+                for pred_label_id, probs in sorted(pred_probs[mask_id].items(), key=lambda x: x[0]):
+                    pred_token = self.tokenizer._convert_id_to_token(pred_label_id)
+                    s += "%s %.2f %.2f, " % (pred_token, len(probs) / total_preds, np.mean(probs))
+                metrics["stat" + str(mask_id)] = s
+            
+#             metrics["acc"] = np.mean(accuracies)
+#             total_preds = sum(len(probs) for probs in pred_probs.values())
+#             s = ""
+#             for pred_label_id, probs in sorted(pred_probs.items(), key=lambda x: x[0]):
+#                 pred_token = self.tokenizer._convert_id_to_token(pred_label_id)
+#                 s += "%s %.2f %.2f, " % (pred_token, len(probs) / total_preds, np.mean(probs))
+#             metrics["stat"] = s
 
         # Prefix all keys with eval_
         for key in list(metrics.keys()):

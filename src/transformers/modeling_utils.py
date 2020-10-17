@@ -581,7 +581,7 @@ class PreTrainedModel(nn.Module, ModuleUtilsMixin, GenerationMixin):
         logger.info("Model weights saved in {}".format(output_model_file))
 
     @classmethod
-    def from_pretrained(cls, pretrained_model_name_or_path, model, *model_args, **kwargs):  # XD: add model arg
+    def from_pretrained(cls, pretrained_model_name_or_path, model=None, *model_args, **kwargs):  # XD: add model arg
         r"""
         Instantiate a pretrained pytorch model from a pre-trained model configuration.
 
@@ -698,7 +698,7 @@ class PreTrainedModel(nn.Module, ModuleUtilsMixin, GenerationMixin):
         local_files_only = kwargs.pop("local_files_only", False)
         use_cdn = kwargs.pop("use_cdn", True)
 
-        if model is None:  # XD: config and model loading stuff can be skipped
+        if model is None or pretrained_model_name_or_path not in cls.state_dict:  # XD: config and model loading stuff can be skipped
             # Load config if we don't provide a configuration
             if not isinstance(config, PretrainedConfig):
                 config_path = config if config is not None else pretrained_model_name_or_path
