@@ -25,7 +25,8 @@ from .modeling_utils import PreTrainedModel
 from .optimization import AdamW, get_linear_schedule_with_warmup
 from .trainer_utils import PREFIX_CHECKPOINT_DIR, EvalPrediction, PredictionOutput, TrainOutput, set_seed
 from .training_args import TrainingArguments
-
+from .modeling_roberta import RobertaDoubleHeadsModel  # XD
+from .modeling_bert import BertDoubleHeadsModel  # XD
 
 _use_native_amp = False
 _use_apex = False
@@ -642,7 +643,7 @@ class Trainer:
                         "You enabled PyTorch/XLA debug metrics but you don't have a TPU "
                         "configured. Check your training configuration if this is unexpected."
                     )
-        
+
         self.evaluate()  # XD
         if self.tb_writer:
             self.tb_writer.close()
@@ -1002,20 +1003,23 @@ class Trainer:
         for inputs in tqdm(dataloader, desc=description):
             loss, logits, labels = self.prediction_step(model, inputs, prediction_loss_only)
             # XD
-            bsz, seq_len, vocab_size = logits.size()
-            masks = inputs['labels'] != -100
-            n_mask = masks.sum(dim=-1)[0].item()
-            logits = logits.masked_select(masks.unsqueeze(-1)).view(bsz, n_mask, vocab_size)
-            probs = F.softmax(logits, dim=-1)
-            pred_labels = logits.argmax(dim=-1)
-            labels = inputs['labels'].masked_select(masks).view(bsz, n_mask)
-            for mask_id in range(n_mask):
-                acc = (pred_labels == labels)[:, mask_id].float().mean().item()
-                accuracies[mask_id].append(acc)
-                for i, pred_label_id in enumerate(pred_labels[:, mask_id]):
-                    pred_probs[mask_id][pred_label_id.item()].append(probs[i, mask_id, pred_label_id].item())
-                
-#             mask = inputs['labels'] != -100
+            all_logits, all_labels = (logits, labels) if isinstance(logits, tuple) else ((logits,), (labels,))
+            for head_name, logits, labels in zip(('', 'tc'), all_logits, all_labels):
+                bsz, seq_len, vocab_size = logits.size()
+                masks = labels != -100
+                n_mask = masks.sum(dim=-1)[0].item()
+                logits = logits.masked_select(masks.unsqueeze(-1)).view(bsz, n_mask, vocab_size)
+                probs = F.softmax(logits, dim=-1)
+                pred_labels = logits.argmax(dim=-1)
+                labels = labels.masked_select(masks).view(bsz, n_mask)
+                for mask_id in range(n_mask):
+                    acc = (pred_labels == labels)[:, mask_id].float().mean().item()
+                    key = head_name + str(mask_id)
+                    accuracies[key].append(acc)
+                    for i, pred_label_id in enumerate(pred_labels[:, mask_id]):
+                        pred_probs[key][pred_label_id.item()].append(probs[i, mask_id, pred_label_id].item())
+
+#             mask = labels != -100
 #             probs = F.softmax((logits * (inputs['labels'] != -100).unsqueeze(-1)).sum(dim=1), dim=-1)
 #             pred_labels = (logits * mask.unsqueeze(-1)).sum(dim=1).argmax(dim=-1)
 #             labels = (inputs['labels'] * mask).sum(dim=-1)
@@ -1024,7 +1028,7 @@ class Trainer:
 #             for i, pred_label_id in enumerate(pred_labels):
 #                 pred_probs[pred_label_id.item()].append(probs[i, pred_label_id].item())
             logits, labels = None, None
-            
+
             if loss is not None:
                 eval_losses.append(loss)
             if logits is not None:
@@ -1062,15 +1066,17 @@ class Trainer:
         if len(eval_losses) > 0:
             metrics["eval_loss"] = np.mean(eval_losses)
             # XD
-            for mask_id in range(len(accuracies)):
-                metrics["acc" + str(mask_id)] = np.mean(accuracies[mask_id])
-                total_preds = sum(len(probs) for probs in pred_probs[mask_id].values())
+            # for mask_id in range(len(accuracies)):
+            for key in accuracies:
+                metrics["acc_" + key] = np.mean(accuracies[key])
+                total_preds = sum(len(probs) for probs in pred_probs[key].values())
                 s = ""
-                for pred_label_id, probs in sorted(pred_probs[mask_id].items(), key=lambda x: x[0]):
-                    pred_token = self.tokenizer._convert_id_to_token(pred_label_id)
+                for pred_label_id, probs in sorted(pred_probs[key].items(), key=lambda x: x[0]):
+                    pred_token = self.tokenizer._convert_id_to_token(pred_label_id) \
+                        if 'tc' not in key else self.tokenizer.id2tag[pred_label_id]
                     s += "%s %.2f %.2f, " % (pred_token, len(probs) / total_preds, np.mean(probs))
-                metrics["stat" + str(mask_id)] = s
-            
+                metrics["stat_" + key] = s
+
 #             metrics["acc"] = np.mean(accuracies)
 #             total_preds = sum(len(probs) for probs in pred_probs.values())
 #             s = ""
@@ -1142,4 +1148,10 @@ class Trainer:
         labels = inputs.get("labels")
         if labels is not None:
             labels = labels.detach()
+        if isinstance(model, RobertaDoubleHeadsModel) or isinstance(model, BertDoubleHeadsModel):  # XD
+            tc_logits = outputs[2] if has_labels else outputs[1]
+            tc_labels = inputs.get("tc_labels")
+            if tc_labels is not None:
+                tc_labels = tc_labels.detach()
+            return (loss, (logits.detach(), tc_logits.detach()), (labels, tc_labels))
         return (loss, logits.detach(), labels)
