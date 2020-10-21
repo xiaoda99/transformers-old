@@ -337,6 +337,7 @@ class RobertaForMaskedLM(BertPreTrainedModel):
         encoder_attention_mask=None,
         labels=None,
         tc_labels=None,  # XD
+        marked_positions=None,  # XD
         output_attentions=None,
         output_hidden_states=None,
         return_dict=None,

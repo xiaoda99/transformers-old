@@ -1,6 +1,7 @@
 from random import randint
 import random
 from itertools import chain
+import numpy as np
 
 def join_lists(x): return list(chain.from_iterable(x))
 
@@ -52,12 +53,13 @@ def rejoin_tokens(tokens):
     return out
 
 def process_markers(tokens, marker='*'):
-    if marker in tokens or 'Ġ' + marker in tokens:
-        marked_positions = [i for i, token in enumerate(tokens) if token in [marker, 'Ġ' + marker]]
-        tokens = [token for token in tokens if token != marker]
+    markers = [marker, 'Ġ' + marker]
+    if any(token in markers for token in tokens):
+        marked_positions = [i for i, token in enumerate(tokens) if token in markers]
+        tokens = [token for token in tokens if token not in markers]
         marked_positions = [p - i for i, p in enumerate(marked_positions)]
-        return marked_positions
-    return []
+        return tokens, marked_positions
+    return tokens, []
 
 def process_mask(tokens, tokenizer):
     output_label = []
@@ -84,13 +86,15 @@ def process_tag(tokens, tokenizer):
     assert len(output_tokens) == len(output_label), '%d != %d' % (len(tokens), len(output_label))
     return output_tokens, output_label
 
-def convert_example_to_features(example, max_seq_length, tokenizer, max_noise_len=0, has_markers=False, has_tags=False):
+def convert_example_to_features(example, max_seq_length, tokenizer, max_noise_len=0,
+                                has_markers=False, has_tags=False):
     cls_token, sep_token = tokenizer.cls_token, tokenizer.sep_token
     tokens_a = example.tokens_a
     tokens_b = example.tokens_b
 
     if has_markers:
-        marked_positions = process_markers(tokens)
+        tokens_a, marked_positions = process_markers(tokens_a)
+        marked_positions = [p + 1 for p in marked_positions]
     if has_tags:
         tokens_a, t1_tag = process_tag(tokens_a, tokenizer)
         tag_ids = [-1] + t1_tag + [-1]
@@ -180,7 +184,8 @@ def convert_example_to_features(example, max_seq_length, tokenizer, max_noise_le
                              # marked_positions=marked_positions, # XD
                              labels=lm_label_ids,
                              )
-    if has_tags: featurs.lc_labeles = tag_ids
+    if has_tags: featurs.tc_labeles = tag_ids
+    if has_markers: features.marked_positions = marked_positions
     if example.guid <= 0:
         print('in convert_example_to_features: features.labels =', features.labels)
     return features
@@ -232,7 +237,8 @@ class CHILDDataset(Dataset):
             assert len(t1) > 0 and len(t2) > 0, "%d %d" % (len(t1), len(t2))
         else:
             # assert self.one_sent
-            t1, t2 = line.strip(), None
+            # t1, t2 = line.strip(), None
+            t1, t2 = line, None
         return t1, t2, label
 
     def __len__(self):
@@ -240,3 +246,34 @@ class CHILDDataset(Dataset):
 
     def __getitem__(self, i):
         return self.features[i]
+
+
+import matplotlib.pyplot as plt
+
+def plot_head_attn(attn, tokens, ax1=None, marked_positions=[]):
+    assert attn.size(0) == attn.size(1) == len(tokens)
+#     fig = plt.figure(figsize=(4, round(attn.size(0) / 4)))
+    if ax1 is None: ax1 = plt.gca()
+    for i in range(attn.size(0)):
+        for j in range(attn.size(1)):
+            if j in [0, attn.size(1) - 1] or attn[i, j].item() < 0.2: continue
+            plt.plot([0, 1], [i, j], color='b', alpha=attn[i, j].item())
+    ax1.set_xticks([0, 1])
+    ax1.set_xlim(0, 1)
+    ax1.axes.xaxis.set_visible(False)
+
+    ax2 = ax1.twinx()
+    for ax in [ax1, ax2]: # has to duplicate axes to set color of yticklabel
+        ax.set_yticks(np.arange(attn.size(0)))
+        ax.set_yticklabels(tokens, fontsize=12)
+        for i, yticklabel in enumerate(ax.get_yticklabels()):
+            if i in marked_positions:
+                yticklabel.set_color('r')
+        ax.tick_params(length=0)
+        ax.set_ylim(attn.size(0) - 1, 0)
+
+        ax.spines['top'].set_visible(False)
+        ax.spines['right'].set_visible(False)
+        ax.spines['bottom'].set_visible(False)
+        ax.spines['left'].set_visible(False)
+    plt.show()
