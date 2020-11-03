@@ -313,7 +313,7 @@ class ModuleUtilsMixin:
 
 
 class PreTrainedModel(nn.Module, ModuleUtilsMixin, GenerationMixin):
-    state_dict = {}  # XD
+    state_dicts = {}  # XD
     r"""
     Base class for all models.
 
@@ -698,7 +698,7 @@ class PreTrainedModel(nn.Module, ModuleUtilsMixin, GenerationMixin):
         local_files_only = kwargs.pop("local_files_only", False)
         use_cdn = kwargs.pop("use_cdn", True)
 
-        if model is None or pretrained_model_name_or_path not in cls.state_dict:  # XD: config and model loading stuff can be skipped
+        if model is None or pretrained_model_name_or_path not in cls.state_dicts:  # XD: config and model loading stuff can be skipped
             # Load config if we don't provide a configuration
             if not isinstance(config, PretrainedConfig):
                 config_path = config if config is not None else pretrained_model_name_or_path
@@ -780,14 +780,14 @@ class PreTrainedModel(nn.Module, ModuleUtilsMixin, GenerationMixin):
 
             # Instantiate model.
             model = cls(config, *model_args, **model_kwargs)
-        
-        if pretrained_model_name_or_path in cls.state_dict: state_dict = cls.state_dict[pretrained_model_name_or_path]  # XD
+
+        if pretrained_model_name_or_path in cls.state_dicts: state_dict = cls.state_dicts[pretrained_model_name_or_path]  # XD
         if state_dict is None and not from_tf:
             try:
                 from time import time; t0 = time()  # XD
                 state_dict = torch.load(resolved_archive_file, map_location="cpu")
                 print('loading state_dict took', round(time() - t0, 3), 'sec')  # XD
-                cls.state_dict[pretrained_model_name_or_path] = state_dict  # XD
+                cls.state_dicts[pretrained_model_name_or_path] = state_dict  # XD
             except Exception:
                 raise OSError(
                     "Unable to load weights from pytorch checkpoint file. "

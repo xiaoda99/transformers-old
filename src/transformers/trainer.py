@@ -25,7 +25,7 @@ from .modeling_utils import PreTrainedModel
 from .optimization import AdamW, get_linear_schedule_with_warmup
 from .trainer_utils import PREFIX_CHECKPOINT_DIR, EvalPrediction, PredictionOutput, TrainOutput, set_seed
 from .training_args import TrainingArguments
-from .modeling_roberta import RobertaDoubleHeadsModel  # XD
+from .modeling_roberta import RobertaDoubleHeadsModel, RobertaDoubleHeadsModel2  # XD
 from .modeling_bert import BertDoubleHeadsModel  # XD
 
 _use_native_amp = False
@@ -1018,15 +1018,6 @@ class Trainer:
                     accuracies[key].append(acc)
                     for i, pred_label_id in enumerate(pred_labels[:, mask_id]):
                         pred_probs[key][pred_label_id.item()].append(probs[i, mask_id, pred_label_id].item())
-
-#             mask = labels != -100
-#             probs = F.softmax((logits * (inputs['labels'] != -100).unsqueeze(-1)).sum(dim=1), dim=-1)
-#             pred_labels = (logits * mask.unsqueeze(-1)).sum(dim=1).argmax(dim=-1)
-#             labels = (inputs['labels'] * mask).sum(dim=-1)
-#             acc = (pred_labels == labels).float().mean().item()
-#             accuracies.append(acc)
-#             for i, pred_label_id in enumerate(pred_labels):
-#                 pred_probs[pred_label_id.item()].append(probs[i, pred_label_id].item())
             logits, labels = None, None
 
             if loss is not None:
@@ -1148,10 +1139,15 @@ class Trainer:
         labels = inputs.get("labels")
         if labels is not None:
             labels = labels.detach()
-        if isinstance(model, RobertaDoubleHeadsModel) or isinstance(model, BertDoubleHeadsModel):  # XD
+        if type(model).__name__ in ['BertDoubleHeadsModel', 'RobertaDoubleHeadsModel', 'RobertaDoubleHeadsModel2']:
+        # if any(isinstance(model, classname) for classname in [BertDoubleHeadsModel, RobertaDoubleHeadsModel, RobertaDoubleHeadsModel2]): # XD
             tc_logits = outputs[2] if has_labels else outputs[1]
             tc_labels = inputs.get("tc_labels")
             if tc_labels is not None:
+                if type(model).__name__ == 'RobertaDoubleHeadsModel2':
+                # if isinstance(model, RobertaDoubleHeadsModel2):
+                    bsz, seq_len = tc_labels.size()
+                    tc_labels = tc_labels[tc_labels != -100].view(bsz, -1)
                 tc_labels = tc_labels.detach()
             return (loss, (logits.detach(), tc_logits.detach()), (labels, tc_labels))
         return (loss, logits.detach(), labels)

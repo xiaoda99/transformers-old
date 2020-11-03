@@ -1,0 +1,242 @@
+{
+  "0" : {
+        "cause" : "bigger",
+        "effect": "heavier",
+        "cause_antonym": "smaller",
+        "effect_antonym": "lighter",
+        "flag": "1"
+    },
+
+  "1" : {
+        "cause" : "eat more food",
+        "effect": "fatter",
+        "cause_antonym": "eat less food",
+        "effect_antonym": "thinner",
+        "flag": "2"
+  },
+
+  "2" : {
+        "cause" : "poorer",
+        "effect": "borrow money from",
+        "cause_antonym": "richer",
+        "effect_antonym": "send money to",
+        "flag": "5"
+  },
+
+  "3" : {
+        "cause" : "do more practice",
+        "effect": "more skilled",
+        "cause_antonym": "do less practice",
+        "effect_antonym": "less skilled",
+        "flag": "2"
+  },
+
+  "4" : {
+        "cause" : "do more practice",
+        "effect": "get higher marks on the exam",
+        "cause_antonym": "do less practice",
+        "effect_antonym": "get lower marks on the exam",
+        "flag": "4"
+  },
+
+  "5" : {
+        "cause" : "faster",
+        "effect": "arrive at the destination earlier",
+        "cause_antonym": "slower",
+        "effect_antonym": "arrive at the destination later",
+        "flag": "3"
+  },
+
+  "6" : {
+        "cause" : "has a higher density",
+        "effect": "sink in",
+        "cause_antonym": "has a lower density",
+        "effect_antonym": "float in",
+        "flag": "6"
+  },
+
+  "7" : {
+        "cause" : "stronger",
+        "effect": "beat",
+        "cause_antonym": "weaker",
+        "effect_antonym": "lose to",
+        "flag": "5"
+  },
+
+  "8" : {
+        "cause" : "smaller",
+        "effect": "easier to put into a box",
+        "cause_antonym": "bigger",
+        "effect_antonym": "harder to put into a box",
+        "flag": "1"
+  },
+
+  "9" : {
+        "cause" : "wider",
+        "effect": "find it harder to slip through cracks",
+        "cause_antonym": "narrower",
+        "effect_antonym": "find it easier to slip through cracks",
+        "flag": "3"
+  },
+
+  "10" : {
+        "cause" : "hotter",
+        "effect": "has a higher temperature",
+        "cause_antonym": "colder",
+        "effect_antonym": "has a lower temperature",
+        "flag": "3"
+  },
+
+  "11" : {
+        "cause" : "taller",
+        "effect": "cast a more lengthy shadow",
+        "cause_antonym": "shorter",
+        "effect_antonym": "cast a less lengthy shadow",
+        "flag": "3"
+  },
+
+  "12" : {
+        "cause" : "get more presents",
+        "effect": "happier",
+        "cause_antonym": "get less presents",
+        "effect_antonym": "less happy",
+        "flag": "2"
+  },
+
+
+  "13" : {
+        "cause" : "harder",
+        "effect": "make a scratch on",
+        "cause_antonym": "softer",
+        "effect_antonym": "make a scratch on",
+        "flag": "5"
+  },
+
+  "14" : {
+        "cause" : "brighter",
+        "effect": "use more power",
+        "cause_antonym": "darker",
+        "effect_antonym": "use less power",
+        "flag": "3"
+  },
+
+  "15" : {
+        "cause" : "more beautiful",
+        "effect": "more popular",
+        "cause_antonym": "less beautiful",
+        "effect_antonym": "less popular",
+        "flag": "1"
+  },
+
+  "16" : {
+        "cause" : "older",
+        "effect": "more knowledgeable",
+        "cause_antonym": "younger",
+        "effect_antonym": "less knowledgeable",
+        "flag": "1"
+  },
+
+  "17" : {
+        "cause" : "more diligent",
+        "effect": "get up earlier",
+        "cause_antonym": "less diligent",
+        "effect_antonym": "get up later",
+        "flag": "3"
+  },
+
+  "18" : {
+        "cause" : "smarter",
+        "effect": "faster at solving problems",
+        "cause_antonym": "less smart",
+        "effect_antonym": "slower at solving problems",
+        "flag": "1"
+  },
+
+  "19" : {
+        "cause" : "simpler",
+        "effect": "take less time",
+        "cause_antonym": "more difficult",
+        "effect_antonym": "take more time",
+        "flag": "3"
+  },
+
+  "20" : {
+        "cause" : "longer",
+        "effect": "heavier",
+        "cause_antonym": "shorter",
+        "effect_antonym": "lighter",
+        "flag": "1"
+  },
+
+  "21" : {
+        "cause" : "thicker",
+        "effect": "heavier",
+        "cause_antonym": "thinner",
+        "effect_antonym": "lighter",
+        "flag": "1"
+  },
+
+  "22" : {
+        "cause" : "kinder",
+        "effect": "get a better ending",
+        "cause_antonym": "more evil",
+        "effect_antonym": "get a worse ending",
+        "flag": "3"
+  },
+
+  "23" : {
+        "cause" : "more modest",
+        "effect": "make more progress",
+        "cause_antonym": "prouder",
+        "effect_antonym": "make less progress",
+        "flag": "3"
+  },
+
+  "24" : {
+        "cause" : "lives farther away",
+        "effect": "arrive later",
+        "cause_antonym": "lives closer",
+        "effect_antonym": "arrive earlier",
+        "flag": "4"
+  },
+
+  "25" : {
+        "cause" : "more outgoing",
+        "effect": "has more friends",
+        "cause_antonym": "more introverted",
+        "effect_antonym": "has fewer friends",
+        "flag": "3"
+  },
+
+  "26" : {
+        "cause" : "has better quality",
+        "effect": "more expensive",
+        "cause_antonym": "has lower quality",
+        "effect_antonym": "cheaper",
+        "flag": "2"
+  },
+
+  "27" : {
+        "cause" : "sharper",
+        "effect": "more dangerous",
+        "cause_antonym": "more blunt",
+        "effect_antonym": "safer",
+        "flag": "1"
+  },
+
+  "28" : {
+        "cause" : "has more power",
+        "effect": "has more responsibility",
+        "cause_antonym": "has less power",
+        "effect_antonym": "has less responsibility",
+        "flag": "4"
+  },
+
+  "29" : {
+        "cause" : "has a higher status",
+        "effect": "has more power",
+        "cause_antonym": "has a lower status",
+        "effect_antonym": "has less power",
+        "flag": "4"
+  }
+}

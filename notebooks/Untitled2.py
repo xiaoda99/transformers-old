@@ -1,7 +1,7 @@
 #!/usr/bin/env python
 # coding: utf-8
 
-# In[92]:
+# In[2]:
 
 
 from IPython import get_ipython
@@ -12,11 +12,14 @@ from IPython.core.interactiveshell import InteractiveShell
 InteractiveShell.ast_node_interactivity = 'all'
 
 
-# In[2]:
+# In[3]:
 
 
+import sys
+sys.path.insert(0, '/nas/xd/projects/transformers/src/transformers')
 import os
-os.environ["CUDA_VISIBLE_DEVICES"] = '2'
+device_mappings = {0: 1, 1: 5, 2: 6, 3: 7, 4: 2, 5: 3, 6: 0, 7: 4}
+os.environ["CUDA_VISIBLE_DEVICES"] = str(device_mappings[5])
 
 import random
 import string
@@ -25,8 +28,11 @@ from itertools import product, chain
 import numpy as np
 from pattern.en import comparative
 
+import matplotlib.pyplot as plt
+import seaborn as sns
 
-# In[34]:
+
+# In[4]:
 
 
 import torch
@@ -39,9 +45,6 @@ from typing import List, Optional, Union
 
 from child_frames import frames
 from utils import *
-
-import sys
-sys.path.insert(0, '/nas/xd/projects/transformers/src/transformers')
 
 import dataclasses
 import logging
@@ -59,7 +62,7 @@ from transformers.modeling_roberta import RobertaDoubleHeadsModel  # XD
 logging.basicConfig(level=logging.ERROR)
 
 
-# In[88]:
+# In[5]:
 
 
 A_template = "{rel_prefix} {dt} {ent0} {rel} {dt} {ent1} {rel_suffix}"
@@ -89,7 +92,8 @@ def strip_rel_id(s, lexical_rel=''):
     if lexical_rel != '': lexical_rel = ' ( ' + lexical_rel + ' )'
     return s.replace(rel_id_span, lexical_rel)
         
-tag2id = {'Ġsame': 0, 'Ġopposite': 1, 'Ġunrelated': 2, 'Ġformer': 3, 'Ġlatter': 4, 'Ġanother': 5}
+tag2id = {'same': 0, 'opposite': 1, 'unrelated': 2, 'former': 3, 'latter': 4, 'another': 5, 'single': 6, 'paired': 7}
+tag2id = {'Ġ' + k: v for k, v in tag2id.items()}
 id2tag = {v: k for k, v in tag2id.items()}
 
 def make_sentences(index=-1, entities=["_X", "_Z"], entity_set=string.ascii_uppercase, determiner="",
@@ -97,8 +101,8 @@ def make_sentences(index=-1, entities=["_X", "_Z"], entity_set=string.ascii_uppe
                    relation_prefix="", relation_suffix="", predicate_prefix="",
                    n_entity_trials=3, has_negA=True, has_negB=True, has_neutral=False, mask_types={'sent_rel'}, 
                    lexical_relations=['same', 'opposite', 'unrelated'], tag_lexical_rel=False, tag_entity_rel=False):
-    if tag_lexical_rel: mask_types.add('lexical_rel')
-    if tag_entity_rel: mask_types.add('entity_rel')
+#     if tag_lexical_rel: mask_types.add('lexical_rel')
+#     if tag_entity_rel: mask_types.add('entity_rel')
         
     def form_As(relations):
         return [A_template.format(dt=determiner, ent0=ent0, ent1=ent1, rel=rel, rel_prefix=relation_prefix, rel_suffix=relation_suffix)
@@ -133,12 +137,21 @@ def make_sentences(index=-1, entities=["_X", "_Z"], entity_set=string.ascii_uppe
 
     def form_sentences(sentence_template, As, Bs, conj):
         def extract_rel_id(s): return int(s[s.index(':') + 1])
-        def get_lexical_rel(rel_id_A, rel_id_B): return 'same' if rel_id_A == rel_id_B else 'opposite'
-        def compare_and_tag_entity(B, A):
-            entity = [e for e in entities if e in B][0]
-            entity_rel = 'former' if A.strip().startswith(entity) else 'latter'
+        def get_lexical_rel(rel_id_A, rel_id_B):
+            return 'same' if rel_id_A == rel_id_B else 'opposite'
+        def tag_token(token, recurred_entity):
+            if token not in entities: return token
+            entity_rel = 'paired' if token == recurred_entity else 'single'
             if 'entity_rel' in mask_types: entity_rel = mask(entity_rel)
-            return B.replace(entity, entity + ' ( ' + entity_rel + ' )')                    
+            return token + ' ( %s )' % entity_rel
+        def compare_and_tag_entity(A, B):
+            recurred_entity = [e for e in entities if e in B.split()][0]
+#             entity_rel = 'former' if A.strip().startswith(recurred_entity) else 'latter'
+#             if 'entity_rel' in mask_types: entity_rel = mask(entity_rel)
+#             return B.replace(entity, entity + ' ( ' + entity_rel + ' )')
+            A = ' '.join([tag_token(token, recurred_entity) for token in A.split()])
+            B = ' '.join([tag_token(token, recurred_entity) for token in B.split()])
+            return A, B                 
         
         if 'sent_rel' in mask_types: conj = mask(conj)
         As_with_rel_ids = [(A, extract_rel_id(A)) for A in As]
@@ -146,12 +159,14 @@ def make_sentences(index=-1, entities=["_X", "_Z"], entity_set=string.ascii_uppe
             
         sentences = []
         for (A, rel_id_A), (B, rel_id_B) in product(As_with_rel_ids, Bs_with_rel_ids):
-            lexical_rel = 'unrelated' if 'Maybe' in conj else get_lexical_rel(rel_id_A, rel_id_B)
+            lexical_rel = 'unrelated' if 'Maybe' in conj                 else get_lexical_rel(rel_id_A, rel_id_B)
             if lexical_rel in lexical_relations:
-                if tag_entity_rel: B = compare_and_tag_entity(B, A)
+                if tag_entity_rel: A, B = compare_and_tag_entity(A, B)
                 if not tag_lexical_rel: lexical_rel = ''
                 elif 'lexical_rel' in mask_types: lexical_rel = mask(lexical_rel)
-                sent = sentence_template.format(A=strip_rel_id(A), B=strip_rel_id(B, lexical_rel), conj=conj)
+                sent = sentence_template.format(A=strip_rel_id(A), 
+                                                B=strip_rel_id(B, lexical_rel), 
+                                                conj=conj)
                 sent = " " + " ".join(sent.split())
                 sentences.append(sent)
         return sentences
@@ -168,9 +183,11 @@ def make_sentences(index=-1, entities=["_X", "_Z"], entity_set=string.ascii_uppe
                            (negAs, Bs['rand'], 'Maybe'),
                           ]:
             sentences[conj] += form_sentences(entailment_template, A, B, conj)
-    assert len(sentences['Right']) == len(sentences['Wrong']), '%d %d' % (len(sentences['Right']), len(sentences['Wrong']))
-    if has_neutral: sentences['Maybe'] = random.sample(sentences['Maybe'], len(sentences['Right']))
-    sentences = join_lists(sentences[k] for k in (sentences.keys() if has_neutral else ['Right', 'Wrong']))
+    assert len(sentences['Right']) == len(sentences['Wrong']),         '%d %d' % (len(sentences['Right']), len(sentences['Wrong']))
+    if has_neutral:
+        sentences['Maybe'] = random.sample(sentences['Maybe'], len(sentences['Right']))
+    keys = sentences.keys() if has_neutral else ['Right', 'Wrong']
+    sentences = join_lists(sentences[k] for k in keys)
     
     substituted_sent_groups = []
     for sent in sentences:
@@ -181,80 +198,17 @@ def make_sentences(index=-1, entities=["_X", "_Z"], entity_set=string.ascii_uppe
         substituted_sent_groups.append(sent_group)
     return sentences, substituted_sent_groups
 
-# make_sentences(has_negA=True, has_negB=True, has_neutral=False, tag_lexical_rel=True, tag_entity_rel=True, 
-#                mask_types={'sent_rel'})[0]
+make_sentences(has_negA=True, has_negB=True, has_neutral=False, tag_lexical_rel=False, tag_entity_rel=True, 
+               mask_types={'sent_rel', 'entity_rel'})[0]
 
 
-# In[18]:
+# In[6]:
 
 
-P_template = '{ent0} {rel} {ent1}'
-transitive_template = '{p0} and {p1} , so {Q} ? {conj} .'
-transitive_wh_QA_template = '{which} is {pred} ? {ent} .'
-    
-def make_transitive(entities=["_X", "_Y", "_Z"], entity_set=string.ascii_uppercase, relation_group=[["big", ], ["small", ]], 
-                    n_entity_trials=3, has_negP=True, has_negQ=True, has_neutral=False, mask_types=['sent_rel']):
-    def form_atoms(relations, entities, has_neg=True):
-        atoms = [P_template.format(ent0=ent0, ent1=ent1, rel=rel) 
-                 for ent0, ent1, rel in [entities + relations[:1], reverse(entities) + reverse(relations)[:1]]]
-        if has_neg:
-            neg_relations = [r.replace('is ', 'is not ') for r in relations]
-            atoms += [P_template.format(ent0=ent0, ent1=ent1, rel=rel) 
-                      for ent0, ent1, rel in [entities + reverse(neg_relations)[:1], reverse(entities) + neg_relations[:1]]]
-        return atoms
- 
-    def form_sentences(transitive_template, Ps, Qs, conj):
-        sentences = []
-        if 'sent_rel' in mask_types: conj = mask(conj)
-        for (p0, p1), Q in product(Ps, Qs):
-            sent = transitive_template.format(p0=strip_rel_id(p0), p1=strip_rel_id(p1), Q=strip_rel_id(Q), conj=conj)
-            sent = " " + " ".join(sent.split())
-            sentences.append(sent)
-        return sentences
-    
-    def form_all(P0_entities, P1_entities, Q_entities, neutral=False):
-        P0, P1 = [], []
-        for rel0 in relation_group[0]:
-            for rel1 in relation_group[1]:
-                relations = ["is %s:%d than" % (get_comparative(rel), i) for i, rel in enumerate([rel0, rel1])]
-                P0 += form_atoms(relations, P0_entities, has_neg=has_negP)
-                P1 += form_atoms(relations, P1_entities, has_neg=has_negP)
-        Ps = [(p0, p1) for p0, p1 in list(product(P0, P1)) + list(product(P1, P0))]
-
-        Qs = form_atoms(relations, Q_entities, has_neg=has_negQ)
-        negQs = [swap_entities(Q, *Q_entities) for Q in Qs]
-        
-        for P, Q, conj in [(Ps, Qs, 'Right'), (Ps, negQs, 'Wrong')]:
-            if neutral: conj = 'Maybe'
-            sentences[conj] += form_sentences(transitive_template, P, Q, conj)
-        return sentences
-    
-    e0, e1, e2 = entities
-    sentences = defaultdict(list)
-    form_all(P0_entities=[e0, e1], P1_entities=[e1, e2], Q_entities=[e0, e2])
-    assert len(sentences['Right']) == len(sentences['Wrong']), '%d %d' % (len(sentences['Right']), len(sentences['Wrong']))
-    sample_ratio = len(relation_group[0]) * len(relation_group[1])
-    if sample_ratio > 1:
-        for key in sentences: sentences[key] = random.sample(sentences[key], len(sentences[key]) // sample_ratio)
-#     print('nRight =', len(sentences['Right']))
-    if has_neutral:
-        form_all(P0_entities=[e0, e1], P1_entities=[e0, e2], Q_entities=[e1, e2], neutral=True)
-        sentences['Maybe'] = random.sample(sentences['Maybe'], len(sentences['Right']))
-    sentences = join_lists(sentences[k] for k in (sentences.keys() if has_neutral else ['Right', 'Wrong']))
-    
-    substituted_sent_groups = []
-    for sent in sentences:
-        sent_group = []
-        for _ in range(n_entity_trials):
-            e0, e1, e2 = random.sample(entity_set, 3)
-            sent_group.append(sent.replace(entities[0], e0).replace(entities[1], e1).replace(entities[2], e2))
-        substituted_sent_groups.append(sent_group)
-    return sentences, substituted_sent_groups
-
-# make_transitive(has_negP=False, has_negQ=False, has_neutral=False)
 
 
-# In[10]:
+
+# In[7]:
 
 
 model_class, tokenizer_class, shortcut = RobertaForMaskedLM, RobertaTokenizer, 'roberta-large'
@@ -262,14 +216,15 @@ model_class, tokenizer_class, shortcut = RobertaForMaskedLM, RobertaTokenizer, '
 model, tokenizer = None, tokenizer_class.from_pretrained(shortcut)
 
 
-# In[90]:
+# In[8]:
 
 
 random.shuffle(frames)
-n_entity_trials = 3
-all_lines = [make_sentences(relation_group=rg, rand_relation_group=frames[(i + 1) % len(frames)], n_entity_trials=n_entity_trials, 
-                            has_negA=True, has_negB=True, tag_lexical_rel=True, tag_entity_rel=True,
-                            has_neutral=False, mask_types={'sent_rel'})[1] 
+n_entity_trials = 10
+all_lines = [make_sentences(relation_group=rg, rand_relation_group=frames[(i + 1) % len(frames)], 
+                            n_entity_trials=n_entity_trials, 
+                            has_negA=True, has_negB=True, tag_lexical_rel=False, tag_entity_rel=True,
+                            has_neutral=False, mask_types={'sent_rel', 'entity_rel'})[1] 
              for i, rg in enumerate(frames)]
 # all_lines = [make_transitive(relation_group=rg, n_entity_trials=10, 
 #                              has_negP=False, has_negQ=False, has_neutral=False, mask_types=['sent_rel'])[1] 
@@ -278,16 +233,17 @@ all_lines = [make_sentences(relation_group=rg, rand_relation_group=frames[(i + 1
 # all_lines = join_lists(all_lines)
 tokenizer.tag2id, tokenizer.id2tag = tag2id, id2tag
 for k in CHILDDataset.all_lines: CHILDDataset.all_lines[k] = None
-train_dataset = CHILDDataset(all_lines, tokenizer, has_markers=True, max_noise_len=0, split_pct=[0.7, 0.3, 0.0], mode='train')
-eval_dataset = CHILDDataset(all_lines, tokenizer, has_markers=True, max_noise_len=0, split_pct=[0.7, 0.3, 0.0], mode='dev')
+train_dataset = CHILDDataset(all_lines, tokenizer, has_markers=True, has_tags=False, max_noise_len=0, split_pct=[0.7, 0.3, 0.0], mode='train')
+eval_dataset = CHILDDataset(all_lines, tokenizer, has_markers=True, has_tags=False, max_noise_len=0, split_pct=[0.7, 0.3, 0.0], mode='dev')
 print('nTrain = %d, nValid = %d' % (len(train_dataset), len(eval_dataset)))
 
 
-# In[91]:
+# In[9]:
 
 
+# model = RobertaDoubleHeadsModel.from_pretrained('roberta-base', model=model)
 model = model_class.from_pretrained('roberta-base', model=model)
-steps = 100 * n_entity_trials // 3
+steps = int(round(100 * n_entity_trials / 3))
 training_args = TrainingArguments(output_dir="./models/model_name", 
     overwrite_output_dir=True, do_train=True, do_eval=True,
     per_device_train_batch_size=32, per_device_eval_batch_size=64,
@@ -297,10 +253,33 @@ training_args = TrainingArguments(output_dir="./models/model_name",
 )
 trainer = Trainer(model=model, args=training_args, train_dataset=train_dataset, eval_dataset=eval_dataset)
 trainer.tokenizer = tokenizer
+
+
+# In[ ]:
+
+
 trainer.train()
 
+"""
+# In[102]:
 
-# In[75]:
+
+trainer.evaluate()
+
+
+# In[80]:
+
+
+model.roberta.selectively_masked_head = (5, 5)
+
+
+# In[78]:
+
+
+trainer.args.per_device_eval_batch_size
+
+
+# In[10]:
 
 
 dataloader = DataLoader(
@@ -312,35 +291,99 @@ dataloader = DataLoader(
 )
 
 
-# In[76]:
+# In[11]:
 
 
 for inputs in dataloader: break
 
-
-# In[77]:
-
-
-inputs['marked_positions'].size()
+for i in range(20):
+    print(i, tokenizer.decode(inputs['input_ids'][i]), 
+          [tokenizer.convert_ids_to_tokens(inputs['input_ids'][i])[j] for j in inputs['marked_positions'][i]])
 
 
-# In[78]:
+# In[19]:
 
 
-i = 0
-tokenizer.decode(inputs['input_ids'][i])
-[tokenizer.convert_ids_to_tokens(inputs['input_ids'][i])[j] for j in inputs['marked_positions'][i]]
-
-
-# In[133]:
-
-
+_ = model.eval()
 inputs = trainer._prepare_inputs(inputs, model)
-loss, logits = model(**inputs)
+with torch.no_grad():
+    loss, logits, attns = model(**inputs, output_attentions=True)
+
+attn_scores, attn_probs = zip(*attns)
+attn_scores, attn_probs = torch.stack(attn_scores, dim=0), torch.stack(attn_probs, dim=0)
+attn_probs = attn_probs.cpu()
 
 
-# In[ ]:
+# In[12]:
 
 
-model.roberta.encoder.layer[0].attention.self
+def normalize_tokens(tokens):
+    return ['@' + token if not token.startswith('Ġ') and token not in ['<s>', '</s>', '<mask>'] else token.replace('Ġ', '') 
+                  for token in tokens] 
 
+
+# In[20]:
+
+
+sample_indices = [[2, 6, 7, 11], 
+                  [1, 3, 4, 5]]
+n_rows, n_cols = len(sample_indices), len(sample_indices[0])
+fig, axs = plt.subplots(n_rows, n_cols, sharey=False, figsize=(4 * n_cols, 4.5 * n_rows))
+for row in range(n_rows):
+    for col in range(n_cols):
+        i, ax = sample_indices[row][col], axs[row][col]
+        p, h = inputs['marked_positions'][i]
+        p, h = p.item(), h.item()
+        pos_attn = attn_probs[:, i, :, h, p]
+        tokens = normalize_tokens(tokenizer.convert_ids_to_tokens(inputs['input_ids'][i]))
+        ax = sns.heatmap(pos_attn, square=True, cbar=False, ax=ax)
+        ax.tick_params(top=True, labeltop=True)
+        _ = ax.set_xlabel('%s - %s' % (tokens[p], tokens[h]))
+
+
+# In[14]:
+
+
+sample_indices = [[2, 6, 7, 11], 
+                  [1, 3, 4, 5]]
+n_rows, n_cols = len(sample_indices), len(sample_indices[0])
+fig, axs = plt.subplots(n_rows, n_cols, sharey=False, figsize=(4 * n_cols, 4.5 * n_rows))
+for row in range(n_rows):
+    for col in range(n_cols):
+        i, ax = sample_indices[row][col], axs[row][col]
+        p, h = inputs['marked_positions'][i]
+        p, h = p.item(), h.item()
+        pos_attn = attn_probs[:, i, :, h, p]
+        tokens = normalize_tokens(tokenizer.convert_ids_to_tokens(inputs['input_ids'][i]))
+        ax = sns.heatmap(pos_attn, square=True, cbar=False, ax=ax)
+        ax.tick_params(top=True, labeltop=True)
+        _ = ax.set_xlabel('%s - %s' % (tokens[p], tokens[h]))
+
+
+# In[175]:
+
+
+i = 4
+layer, head = 5, 5
+seq_len = inputs['attention_mask'][4].sum().item()
+attn =  attn_probs[layer, i, head, : seq_len, : seq_len]
+tokens = normalize_tokens(tokenizer.convert_ids_to_tokens(inputs['input_ids'][i])[: seq_len])
+size = round(attn.size(0) / 3)
+fig, (ax0, ax1) = plt.subplots(1, 2, figsize=(size  * 2., size), gridspec_kw={'width_ratios': [3, 1]})
+_ = sns.heatmap((attn * 100).long(), square=True, cbar=True, annot=False, fmt='d', xticklabels=tokens, yticklabels=tokens, ax=ax0)
+plot_head_attn(attn, tokens, ax1=ax1, marked_positions=inputs['marked_positions'][i]) 
+
+
+# In[1]:
+
+
+from captum.attr import (
+    GradientShap,
+    DeepLift,
+    DeepLiftShap,
+    IntegratedGradients,
+    LayerConductance,
+    NeuronConductance,
+    NoiseTunnel,
+)
+"""

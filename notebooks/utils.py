@@ -134,7 +134,7 @@ def convert_example_to_features(example, max_seq_length, tokenizer, max_noise_le
 
     if tokens_b is not None and len(tokens_b) > 0:
         if has_markers:
-            t2_marked_positions = process_markers(tokens_b)
+            tokens_b, t2_marked_positions = process_markers(tokens_b)
             t2_marked_positions = [len(tokens) + p for p in t2_marked_positions]
             marked_positions += t2_marked_positions
         if has_tags:
@@ -181,12 +181,11 @@ def convert_example_to_features(example, max_seq_length, tokenizer, max_noise_le
                              attention_mask=input_mask,
                              token_type_ids=segment_ids,
                              position_ids=pos_ids,  # XD
-                             # marked_positions=marked_positions, # XD
                              labels=lm_label_ids,
                              )
-    if has_tags: featurs.tc_labeles = tag_ids
-    if has_markers: features.marked_positions = marked_positions
-    if example.guid <= 0:
+    if has_tags: features.tc_labels = tag_ids
+    if has_markers: features.head_mask = marked_positions
+    if example.guid <= -1:
         print('in convert_example_to_features: features.labels =', features.labels)
     return features
 
@@ -200,7 +199,7 @@ class CHILDDataset(Dataset):
                 max_seq_len=None, max_noise_len=0, split_pct=[0.7, 0.3, 0.0], mode=Split.train):
         if isinstance(mode, str): mode = Split[mode]
         if CHILDDataset.all_lines[mode] is None:
-            random.shuffle(all_lines)
+            # random.shuffle(all_lines)
             n_dev = int(round(len(all_lines) * split_pct[1]))
             n_test = int(round(len(all_lines) * split_pct[2]))
             n_train = len(all_lines) - n_dev - n_test
@@ -233,7 +232,7 @@ class CHILDDataset(Dataset):
     def split_sent(self, line):
         label = 0
         if "|||" in line:
-            t1, t2 = [t.strip() for t in line.split("|||")]
+            t1, t2 = line.split("|||")
             assert len(t1) > 0 and len(t2) > 0, "%d %d" % (len(t1), len(t2))
         else:
             # assert self.one_sent
@@ -277,3 +276,92 @@ def plot_head_attn(attn, tokens, ax1=None, marked_positions=[]):
         ax.spines['bottom'].set_visible(False)
         ax.spines['left'].set_visible(False)
     plt.show()
+
+def normalize_tokens(tokens):
+    return ['@' + token if not token.startswith('Ġ') and token not in ['<s>', '</s>', '<mask>']
+            else token.replace('Ġ', '').replace('<mask>', '_')
+            for token in tokens]
+
+import string
+P_template = '{ent0} {rel} {ent1}'
+transitive_template = '{p0} and {p1} , so {Q} ? {conj} .'
+transitive_wh_QA_template = '{which} is {pred} ? {ent} .'
+
+def make_transitive(entities=["_X", "_Y", "_Z"], entity_set=string.ascii_uppercase,
+                    relation_group=[["big", ], ["small", ]], n_entity_trials=3,
+                    has_negP=True, has_negQ=True, has_neutral=False, mask_types=['sent_rel']):
+    def form_atoms(relations, entities, has_neg=True):
+        atoms = [P_template.format(ent0=ent0, ent1=ent1, rel=rel) for ent0, ent1, rel in
+                 [entities + relations[:1], reverse(entities) + reverse(relations)[:1]]]
+        if has_neg:
+            neg_rels = [r.replace('is ', 'is not ') for r in relations]
+            atoms += [P_template.format(ent0=ent0, ent1=ent1, rel=rel) for ent0, ent1, rel in
+                      [entities + reverse(neg_rels)[:1], reverse(entities) + neg_rels[:1]]]
+        return atoms
+
+    def form_sentences(transitive_template, Ps, Qs, conj):
+        sentences = []
+        if 'sent_rel' in mask_types: conj = mask(conj)
+        for (p0, p1), Q in product(Ps, Qs):
+            sent = transitive_template.format(p0=strip_rel_id(p0), p1=strip_rel_id(p1),
+                                              Q=strip_rel_id(Q), conj=conj)
+            sent = " " + " ".join(sent.split())
+            sentences.append(sent)
+        return sentences
+
+    def form_all(P0_entities, P1_entities, Q_entities, neutral=False):
+        P0, P1 = [], []
+        for rel0 in relation_group[0]:
+            for rel1 in relation_group[1]:
+                relations = ["is %s:%d than" % (get_comparative(rel), i)
+                             for i, rel in enumerate([rel0, rel1])]
+                P0 += form_atoms(relations, P0_entities, has_neg=has_negP)
+                P1 += form_atoms(relations, P1_entities, has_neg=has_negP)
+        Ps = [(p0, p1) for p0, p1 in list(product(P0, P1)) + list(product(P1, P0))]
+
+        Qs = form_atoms(relations, Q_entities, has_neg=has_negQ)
+        negQs = [swap_entities(Q, *Q_entities) for Q in Qs]
+
+        for P, Q, conj in [(Ps, Qs, 'Right'), (Ps, negQs, 'Wrong')]:
+            if neutral: conj = 'Maybe'
+            sentences[conj] += form_sentences(transitive_template, P, Q, conj)
+        return sentences
+
+    e0, e1, e2 = entities
+    sentences = defaultdict(list)
+    form_all(P0_entities=[e0, e1], P1_entities=[e1, e2], Q_entities=[e0, e2])
+    assert len(sentences['Right']) == len(sentences['Wrong']), \
+        '%d %d' % (len(sentences['Right']), len(sentences['Wrong']))
+    sample_ratio = len(relation_group[0]) * len(relation_group[1])
+    if sample_ratio > 1:
+        for key in sentences:
+            sentences[key] = random.sample(sentences[key], len(sentences[key]) // sample_ratio)
+#     print('nRight =', len(sentences['Right']))
+    if has_neutral:
+        form_all(P0_entities=[e0, e1], P1_entities=[e0, e2], Q_entities=[e1, e2], neutral=True)
+        sentences['Maybe'] = random.sample(sentences['Maybe'], len(sentences['Right']))
+    keys = sentences.keys() if has_neutral else ['Right', 'Wrong']
+    sentences = join_lists(sentences[k] for k in keys)
+
+    substituted_sent_groups = []
+    for sent in sentences:
+        sent_group = []
+        for _ in range(n_entity_trials):
+            e0, e1, e2 = random.sample(entity_set, 3)
+            sent_group.append(sent.replace(entities[0], e0)
+                              .replace(entities[1], e1)
+                              .replace(entities[2], e2))
+        substituted_sent_groups.append(sent_group)
+    return sentences, substituted_sent_groups
+
+# make_transitive(has_negP=False, has_negQ=False, has_neutral=False)
+
+def mlm_fwd_fn(inputs, token_type_ids=None, position_ids=None, attention_mask=None, labels=None, mask_id=None):
+    logits = model(inputs, token_type_ids=token_type_ids, position_ids=position_ids, attention_mask=attention_mask)[0]
+    bsz, seq_len, vocab_size = logits.size()
+    return logits[labels != -100].view(bsz, -1, vocab_size)[:, mask_id].max(dim=-1).values
+
+def summarize_attributions(attributions):
+    attributions = attributions.sum(dim=-1).squeeze(0)
+    attributions = attributions / torch.norm(attributions)
+    return attributions
