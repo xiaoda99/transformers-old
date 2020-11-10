@@ -275,7 +275,7 @@ class Trainer:
         elif self.args.local_rank != -1:
             return SequentialDistributedSampler(eval_dataset)
         else:
-            return SequentialSampler(eval_dataset)
+            return RandomSampler(eval_dataset)  # XD SequentialSampler(eval_dataset)
 
     def get_eval_dataloader(self, eval_dataset: Optional[Dataset] = None) -> DataLoader:
         """
@@ -705,7 +705,7 @@ class Trainer:
         # XD
         for k, v in output.items():
             if any(s in k for s in ["loss", "acc", "epoch"]):
-                output[k] = round(v, 3)
+                output[k] = round(v, 6 if "loss" in k else 3)
         if iterator is not None:
             iterator.write(output)
         else:

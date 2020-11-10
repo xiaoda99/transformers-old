@@ -1,6 +1,7 @@
 from random import randint
 import random
 from itertools import chain
+from collections import defaultdict
 import numpy as np
 
 def join_lists(x): return list(chain.from_iterable(x))
@@ -16,6 +17,14 @@ def mask(ent_str):
         return '%s [ %s ]' % (tokens[0], tokens[1])
     else:
         assert False, ent_str
+
+def negate_sent(sent):
+    assert ' is ' in sent
+    neg_sents = []
+    neg_sent0 = sent.replace(' is ', ' is not ') if 'more ' not in sent else sent.replace('more ', 'less ')
+    neg_sents.append(neg_sent0)
+    neg_sents.append('it is unlikely that ' + sent)
+    return neg_sents
 
 def swap_entities(sent, e0='_X', e1='_Z'):
     return sent.replace(e0, 'xx').replace(e1, e0).replace('xx', e1)
@@ -52,26 +61,57 @@ def rejoin_tokens(tokens):
             out.append(token)
     return out
 
-def process_markers(tokens, marker='*'):
-    markers = [marker, 'Ġ' + marker]
-    if any(token in markers for token in tokens):
-        marked_positions = [i for i, token in enumerate(tokens) if token in markers]
-        tokens = [token for token in tokens if token not in markers]
-        marked_positions = [p - i for i, p in enumerate(marked_positions)]
-        return tokens, marked_positions
-    return tokens, []
+# def process_markers(tokens, marker='*'):
+#     markers = [marker, 'Ġ' + marker]
+#     if any(token in markers for token in tokens):
+#         marked_positions = [i for i, token in enumerate(tokens) if token in markers]
+#         tokens = [token for token in tokens if token not in markers]
+#         marked_positions = [p - i for i, p in enumerate(marked_positions)]
+#         return tokens, marked_positions
+#     return tokens, []
 
-def process_mask(tokens, tokenizer):
+token2marker = {'same': '*', 'opposite': '*', 'former': '#', 'latter': '#'}
+
+def get_matched_marker(token, markers):
+    token = token.replace('Ġ', '')
+    if token in markers:
+        return token
+    if token in token2marker:
+        return token2marker[token]
+    return None
+
+def process_markers(tokens, markers, pos_offset=0):
+    out_tokens = []
+    marked_positions = defaultdict(list)
+    pos = 0
+    for token in tokens:
+        marker = get_matched_marker(token, markers.values())
+        if marker:
+            marked_positions[marker].append(pos + pos_offset)
+        else:
+            out_tokens.append(token)
+            pos += 1
+    return out_tokens, marked_positions
+
+def process_mask(tokens, tokenizer, markers, marked_positions):
     output_label = []
+    marked_pos_labels = []
+    tokens = tokens.copy()
     for i, token in enumerate(tokens):
         if token.startswith("[") and token.endswith("]") and token not in tokenizer.all_special_tokens:  # masked word
             token = token[1:-1]
             tokens[i] = tokenizer.mask_token
-            output_label.append(tokenizer._convert_token_to_id(token))
+            marker = get_matched_marker(token, markers.values()) if markers is not None else None
+            if marker is not None:
+                output_label.append(-1 if token.endswith(marker) else tokenizer._convert_token_to_id(token))
+                positions = marked_positions[marker]
+                assert len(positions) == 2, marker + ' ' + str(len(positions))
+                marked_pos_labels.append(positions)
+            else:
+                output_label.append(tokenizer._convert_token_to_id(token))
         else:
             output_label.append(-1)
-#     print('in process_mask:', tokens, output_label)
-    return tokens, output_label
+    return tokens, output_label, marked_pos_labels
 
 def process_tag(tokens, tokenizer):
     output_tokens, output_label = [], []
@@ -87,19 +127,20 @@ def process_tag(tokens, tokenizer):
     return output_tokens, output_label
 
 def convert_example_to_features(example, max_seq_length, tokenizer, max_noise_len=0,
-                                has_markers=False, has_tags=False):
+                                markers=None, has_tags=False):
     cls_token, sep_token = tokenizer.cls_token, tokenizer.sep_token
     tokens_a = example.tokens_a
     tokens_b = example.tokens_b
 
-    if has_markers:
-        tokens_a, marked_positions = process_markers(tokens_a)
-        marked_positions = [p + 1 for p in marked_positions]
+    marked_positions = None
+    if markers is not None:
+        tokens_a, marked_positions = process_markers(tokens_a, markers, pos_offset=1)
     if has_tags:
         tokens_a, t1_tag = process_tag(tokens_a, tokenizer)
         tag_ids = [-1] + t1_tag + [-1]
-    tokens_a, t1_label = process_mask(tokens_a, tokenizer)
+    tokens_a, t1_label, t1_marked_pos_labels = process_mask(tokens_a, tokenizer, markers, marked_positions)
     lm_label_ids = [-1] + t1_label + [-1]
+    marked_pos_labels = t1_marked_pos_labels
 
     tokens = []
     segment_ids = []
@@ -133,14 +174,16 @@ def convert_example_to_features(example, max_seq_length, tokenizer, max_noise_le
         cur_pos_id += randint(0, max_noise_len)
 
     if tokens_b is not None and len(tokens_b) > 0:
-        if has_markers:
-            tokens_b, t2_marked_positions = process_markers(tokens_b)
-            t2_marked_positions = [len(tokens) + p for p in t2_marked_positions]
-            marked_positions += t2_marked_positions
+        if markers is not None:
+            tokens_b, t2_marked_positions = process_markers(tokens_b, markers, pos_offset=len(tokens))
+            # marked_positions += t2_marked_positions
+            for marker in t2_marked_positions:
+                marked_positions[marker] += t2_marked_positions[marker]
         if has_tags:
             tokens_b, t2_tag = process_tag(tokens_b, tokenizer)
             tag_ids += (t2_tag + [-1])
-        tokens_b, t2_label = process_mask(tokens_b, tokenizer)
+        tokens_b, t2_label, t2_marked_pos_labels = process_mask(tokens_b, tokenizer, markers, marked_positions)
+        marked_pos_labels += t2_marked_pos_labels
         lm_label_ids += (t2_label + [-1])
 
         for token in tokens_b:
@@ -171,7 +214,11 @@ def convert_example_to_features(example, max_seq_length, tokenizer, max_noise_le
     assert len(input_mask) == max_seq_length
     assert len(segment_ids) == max_seq_length
     assert len(lm_label_ids) == max_seq_length
-    assert len(pos_ids) == max_seq_length  # XD
+    # XD
+    assert len(pos_ids) == max_seq_length
+    # if markers is not None:
+    #     n_masks, n_labels, n_labels2 = input_ids.count(tokenizer.mask_token_id), sum(i != -1 for i in lm_label_ids), len(marked_pos_labels)
+    #     assert n_masks == n_labels + n_labels2, '%d != %d + %d' % (n_masks, n_labels, n_labels2)
     lm_label_ids = [-100 if i == -1 else i for i in lm_label_ids]
     if has_tags:
         assert len(tag_ids) == max_seq_length, '%d != %d' % (len(tag_ids), max_seq_length)
@@ -184,36 +231,50 @@ def convert_example_to_features(example, max_seq_length, tokenizer, max_noise_le
                              labels=lm_label_ids,
                              )
     if has_tags: features.tc_labels = tag_ids
-    if has_markers: features.head_mask = marked_positions
+    if markers is not None:
+        # features.head_mask = marked_positions
+        features.marked_pos_labels = marked_pos_labels
     if example.guid <= -1:
         print('in convert_example_to_features: features.labels =', features.labels)
     return features
 
 from torch.utils.data.dataset import Dataset
-from transformers.data.datasets.glue import Split
+from enum import Enum
+
+class Split(Enum):
+    train = "train"
+    dev = "dev"
+    test = "test"
+
+def split(l, split_pct):
+    n = int(round(len(l) * split_pct[0]))
+    return l[:n], l[n:]
 
 class CHILDDataset(Dataset):
     all_lines = {Split.train: None, Split.dev: None, Split.test: None}
 
-    def __init__(self, all_lines, tokenizer, has_markers=False, has_tags=False,
-                max_seq_len=None, max_noise_len=0, split_pct=[0.7, 0.3, 0.0], mode=Split.train):
+    def __init__(self, all_lines, tokenizer, markers=None, has_tags=False, max_seq_len=None,
+            max_noise_len=0, n_replicas=1, split_pct=[0.7, 0.3, 0.0], mode=Split.train):
+        def flatten(lines):
+            if len(lines) > 0 and type(lines[0]) == list: lines = join_lists(lines)
+            return join_lists(lines) if len(lines) > 0 and type(lines[0]) == list else lines
+        def sample(l, n): return l if len(l) <= n else random.sample(l, n)
+
         if isinstance(mode, str): mode = Split[mode]
-        if CHILDDataset.all_lines[mode] is None:
-            # random.shuffle(all_lines)
-            n_dev = int(round(len(all_lines) * split_pct[1]))
-            n_test = int(round(len(all_lines) * split_pct[2]))
-            n_train = len(all_lines) - n_dev - n_test
+        # if CHILDDataset.all_lines[mode] is None:
+        #     # random.shuffle(all_lines)
+        #     n_dev = int(round(len(all_lines) * split_pct[1]))
+        #     n_test = int(round(len(all_lines) * split_pct[2]))
+        #     n_train = len(all_lines) - n_dev - n_test
 
-            def flatten(lines):
-                if len(lines) > 0 and type(lines[0]) == list: lines = join_lists(lines)
-                return join_lists(lines) if len(lines) > 0 and type(lines[0]) == list else lines
-
-            CHILDDataset.all_lines[Split.train] = flatten(all_lines[:n_train])
-            CHILDDataset.all_lines[Split.dev] = flatten(all_lines[n_train: n_train + n_dev])
-            CHILDDataset.all_lines[Split.test] = flatten(all_lines[n_train + n_dev:])
-
+        #     CHILDDataset.all_lines[Split.train] = flatten(all_lines[:n_train])
+        #     CHILDDataset.all_lines[Split.dev] = sample(flatten(all_lines[n_train: n_train + n_dev]), 10000)
+        #     CHILDDataset.all_lines[Split.test] = sample(flatten(all_lines[n_train + n_dev:]), 10000)
+        # all_lines = CHILDDataset.all_lines[mode]
+        all_lines = flatten(all_lines)
+        if mode in [Split.dev, Split.test]: all_lines = sample(all_lines, 10000)
         examples = []
-        for i, line in enumerate(CHILDDataset.all_lines[mode]):
+        for i, line in enumerate(all_lines):
             t1, t2, is_next_label = self.split_sent(line)
             tokens_a = rejoin_tokens(tokenizer.tokenize(t1))
             tokens_b = rejoin_tokens(tokenizer.tokenize(t2)) if t2 is not None else None
@@ -225,9 +286,11 @@ class CHILDDataset(Dataset):
                 if example.tokens_b is not None else len(example.tokens_a) + 2
                 for example in examples])
 
-        self.features = [convert_example_to_features(example, max_seq_len, tokenizer,
-                        has_markers=has_markers, has_tags=has_tags,max_noise_len=max_noise_len)
-             for example in examples]
+        self.features = []
+        for _ in range(n_replicas):
+            self.features += [convert_example_to_features(example, max_seq_len, tokenizer,
+                            markers=markers, has_tags=has_tags, max_noise_len=max_noise_len)
+                 for example in examples]
 
     def split_sent(self, line):
         label = 0
@@ -355,6 +418,10 @@ def make_transitive(entities=["_X", "_Y", "_Z"], entity_set=string.ascii_upperca
     return sentences, substituted_sent_groups
 
 # make_transitive(has_negP=False, has_negQ=False, has_neutral=False)
+
+# all_lines = [make_transitive(relation_group=rg, n_entity_trials=10,
+#                              has_negP=False, has_negQ=False, has_neutral=False, mask_types=['sent_rel'])[1]
+#              for i, rg in enumerate(frames)]
 
 def mlm_fwd_fn(inputs, token_type_ids=None, position_ids=None, attention_mask=None, labels=None, mask_id=None):
     logits = model(inputs, token_type_ids=token_type_ids, position_ids=position_ids, attention_mask=attention_mask)[0]

@@ -22,6 +22,7 @@ import os
 import warnings
 from dataclasses import dataclass
 from typing import Optional, Tuple
+import random  # XD
 
 import torch
 import torch.utils.checkpoint
@@ -442,6 +443,10 @@ class BertEncoder(nn.Module):
         super().__init__()
         self.config = config
         self.layer = nn.ModuleList([BertLayer(config) for _ in range(config.num_hidden_layers)])
+        # XD
+        self.add_holoattention = False
+        if self.add_holoattention:
+            self.holoattn = BertHoloAttention(config)
 
     def forward(
         self,
@@ -450,10 +455,13 @@ class BertEncoder(nn.Module):
         head_mask=None,
         encoder_hidden_states=None,
         encoder_attention_mask=None,
+        token_type_ids=None,  # XD
+        marked_positions=None,  # XD
         output_attentions=False,
         output_hidden_states=False,
         return_dict=False,
     ):
+        output_attentions = output_attentions or self.add_holoattention  # XD
         all_hidden_states = () if output_hidden_states else None
         all_attentions = () if output_attentions else None
         for i, layer_module in enumerate(self.layer):
@@ -488,7 +496,14 @@ class BertEncoder(nn.Module):
             hidden_states = layer_outputs[0]
             if output_attentions:
                 # all_attentions = all_attentions + (layer_outputs[1],)
-                all_attentions = all_attentions + (layer_outputs[1:],)  # XD
+                if not self.add_holoattention or i < self.holoattn.num_holoattn_layers:   # XD
+                    all_attentions = all_attentions + (layer_outputs[1:],)
+            if self.add_holoattention and i == self.holoattn.num_holoattn_layers - 1:  # XD
+                _, all_attentions = zip(*all_attentions)
+                holoattn_hidden, holoattn_output = self.holoattn(all_attentions, token_type_ids, marked_positions=marked_positions)
+                if random.random() < 0.05: print('hidden_states.abs().mean(), holoattn_output.abs().mean() =', hidden_states.abs().mean().item(), holoattn_output.abs().mean().item())
+                hidden_states += holoattn_output.unsqueeze(1)
+                all_attentions = holoattn_hidden
 
         if output_hidden_states:
             all_hidden_states = all_hidden_states + (hidden_states,)
@@ -699,21 +714,22 @@ BERT_INPUTS_DOCSTRING = r"""
 class BertHoloAttention(nn.Module):
     def __init__(self, config):
         super().__init__()
-        self.hidden_size = 144
-        self.dense0 = nn.Linear(config.num_hidden_layers * config.num_attention_heads, self.hidden_size)
-        self.act_fn = nn.Softmax(-1) if False else nn.functional.relu
+        self.num_holoattn_layers = 8 or config.num_hidden_layers
+        self.hidden_size = 32
+        self.dense0 = nn.Linear(self.num_holoattn_layers * config.num_attention_heads, self.hidden_size)
+        self.act_fn = nn.Identity() if False else nn.functional.relu
         self.dropout = nn.Dropout(config.hidden_dropout_prob)
         self.dense1 = nn.Linear(self.hidden_size, config.hidden_size)
 
     def forward(self, all_attentions, token_type_ids, marked_positions=None):
         all_attentions = torch.cat(all_attentions, dim=1).permute(0, 2, 3, 1) # (bsz, H*L, seq_len, seq_len) -> (bsz, seq_len, seq_len, L*H)
-        # hidden_states = self.act_fn(self.dense0(all_attentions))  # (bsz, seq_len, seq_len, L*H) -> (bsz, seq_len, seq_len, hidden_size)
-        # hidden_states = self.dropout(hidden_states)
-        hidden_states = all_attentions
+        hidden_states = self.dense0(all_attentions)  # (bsz, seq_len, seq_len, L*H) -> (bsz, seq_len, seq_len, hidden_size)
+        hidden_states = self.dropout(self.act_fn(hidden_states))
+        # hidden_states = all_attentions
         if marked_positions is not None:
             src_pos, tgt_pos = marked_positions.t()
             hidden_states = hidden_states[torch.arange(hidden_states.size(0)), tgt_pos, src_pos]
-            # print('hidden_states_sparsity0 =', (hidden_states > 0).float().mean())
+            if random.random() < 0.01: print('hidden_states_sparsity0 =', (hidden_states > 0).float().mean().item())
         else:
             # token_type_mask = token_type_ids.unsqueeze(1) != token_type_ids.unsqueeze(2) # (bsz, seq_len, seq_len)
             token_type_mask = (token_type_ids.unsqueeze(1) == 0) * (token_type_ids.unsqueeze(2) == 1) # (bsz, seq_len, seq_len)
@@ -757,8 +773,10 @@ class BertModel(BertPreTrainedModel):
         self.embeddings = BertEmbeddings(config)
         self.encoder = BertEncoder(config)
         self.pooler = BertPooler(config)
-        self.add_holoattention = True
-        if self.add_holoattention: self.holoattn = BertHoloAttention(config)  # XD
+        # XD
+        # self.add_holoattention = True
+        # if self.add_holoattention:
+        #     self.holoattn = BertHoloAttention(config)
         self.init_weights()
 
     def get_input_embeddings(self):
@@ -876,19 +894,21 @@ class BertModel(BertPreTrainedModel):
             head_mask=head_mask,
             encoder_hidden_states=encoder_hidden_states,
             encoder_attention_mask=encoder_extended_attention_mask,
-            output_attentions=output_attentions or self.add_holoattention,  # XD
+            token_type_ids=token_type_ids if self.encoder.add_holoattention else None,  # XD
+            marked_positions=marked_positions if self.encoder.add_holoattention else None,  # XD
+            output_attentions=output_attentions, # or self.add_holoattention,  # XD
             output_hidden_states=output_hidden_states,
             return_dict=return_dict,
         )
         sequence_output = encoder_outputs[0]
         pooled_output = self.pooler(sequence_output)
 
-        if self.add_holoattention:  # XD
-            all_attentions = encoder_outputs[1]
-            _, all_attentions = zip(*all_attentions)
-            holoattn_hidden, holoattn_output = self.holoattn(all_attentions, token_type_ids, marked_positions=marked_positions)
-            # sequence_output += holoattn_output.unsqueeze(1)
-            pooled_output = holoattn_hidden
+        # if self.add_holoattention:  # XD
+        #     all_attentions = encoder_outputs[1]
+        #     _, all_attentions = zip(*all_attentions)
+        #     holoattn_hidden, holoattn_output = self.holoattn(all_attentions, token_type_ids, marked_positions=marked_positions)
+        #     sequence_output += holoattn_output.unsqueeze(1)
+        #     pooled_output = holoattn_hidden
 
         if not return_dict:
             return (sequence_output, pooled_output) + encoder_outputs[1:]

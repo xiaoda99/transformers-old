@@ -18,6 +18,11 @@
 
 import logging
 import warnings
+import random
+# XD
+import numpy as np
+import matplotlib.pyplot as plt
+import seaborn as sns
 
 import torch
 import torch.nn as nn
@@ -505,7 +510,7 @@ class RobertaDoubleHeadsModel2(BertPreTrainedModel):  # XD
         self.dropout = nn.Dropout(config.hidden_dropout_prob)
         self.num_tc_masks = 1
         self.num_tc_labels = 2
-        self.classifier = nn.Linear(self.roberta.holoattn.hidden_size, self.num_tc_masks * self.num_tc_labels)  # config.num_labels)
+        self.classifier = nn.Linear(self.roberta.encoder.holoattn.hidden_size, self.num_tc_masks * self.num_tc_labels)  # config.num_labels)
 
         self.init_weights()
 
@@ -558,8 +563,8 @@ class RobertaDoubleHeadsModel2(BertPreTrainedModel):  # XD
         sequence_output = outputs[0]
         prediction_scores = self.lm_head(sequence_output)
         # XD
-        holoattn_output = outputs[1]
-        tc_logits = self.classifier(holoattn_output).view(-1, self.num_tc_masks, self.num_tc_labels)
+        holoattn_hidden = outputs[2]  # all_attentions
+        tc_logits = self.classifier(holoattn_hidden).view(-1, self.num_tc_masks, self.num_tc_labels)
 
         masked_lm_loss = None
         if labels is not None:
@@ -571,7 +576,7 @@ class RobertaDoubleHeadsModel2(BertPreTrainedModel):  # XD
         if tc_labels is not None:
             loss_fct = CrossEntropyLoss()
             masked_tc_loss = loss_fct(tc_logits.view(-1, self.num_tc_labels), tc_labels[tc_labels != -100])
-            masked_lm_loss = masked_tc_loss
+            masked_lm_loss += masked_tc_loss
 
         if not return_dict:
             output = (prediction_scores, tc_logits) + outputs[2:]  # XD
@@ -583,6 +588,148 @@ class RobertaDoubleHeadsModel2(BertPreTrainedModel):  # XD
             hidden_states=outputs.hidden_states,
             attentions=outputs.attentions,
         )
+
+@add_start_docstrings("""RoBERTa Model with a `language modeling` head and a `token classification` head. """, ROBERTA_START_DOCSTRING)
+class RobertaDoubleHeadsModel3(BertPreTrainedModel):  # XD
+    base_model_prefix = "roberta"
+
+    def __init__(self, config):
+        super().__init__(config)
+        self.roberta = RobertaModel(config)
+        self.lm_head = RobertaLMHead(config)
+        self.rel_head = RobertaRelHead(config)  # XD
+
+        self.init_weights()
+
+    def get_output_embeddings(self):
+        return self.lm_head.decoder
+
+    @add_start_docstrings_to_callable(ROBERTA_INPUTS_DOCSTRING.format("(batch_size, sequence_length)"))
+    @add_code_sample_docstrings(
+        tokenizer_class=_TOKENIZER_FOR_DOC,
+        checkpoint="roberta-base",
+        output_type=MaskedLMOutput,
+        config_class=_CONFIG_FOR_DOC,
+    )
+    def forward(
+        self,
+        input_ids=None,
+        attention_mask=None,
+        token_type_ids=None,
+        position_ids=None,
+        head_mask=None,
+        inputs_embeds=None,
+        encoder_hidden_states=None,
+        encoder_attention_mask=None,
+        labels=None,
+        marked_pos_labels=None,  # XD
+        output_attentions=None,
+        output_hidden_states=None,
+        return_dict=None,
+        **kwargs
+    ):
+        assert "lm_labels" not in kwargs, "Use `BertWithLMHead` for autoregressive language modeling task."
+        assert kwargs == {}, f"Unexpected keyword arguments: {list(kwargs.keys())}."
+
+        return_dict = return_dict if return_dict is not None else self.config.use_return_dict
+
+        outputs = self.roberta(
+            input_ids,
+            attention_mask=attention_mask,
+            token_type_ids=token_type_ids,
+            position_ids=position_ids,
+            head_mask=head_mask,
+            inputs_embeds=inputs_embeds,
+            encoder_hidden_states=encoder_hidden_states,
+            encoder_attention_mask=encoder_attention_mask,
+            output_attentions=True, # XD
+            output_hidden_states=True, # XD
+            return_dict=return_dict,
+        )
+
+        sequence_output = outputs[0]
+        prediction_scores = self.lm_head(sequence_output)
+
+        # XD
+        all_hidden_states, all_attentions = outputs[2:]
+        hidden_states = all_hidden_states[-1]
+        # rel_mask = (input_ids == self.tokenizer.mask_token_id) * (labels == -100)
+        rel_mask = (input_ids == self.tokenizer.mask_token_id) * (input_ids.roll(1, -1) != self.tokenizer._convert_token_to_id('Ġ?'))
+        bsz = input_ids.size(0)
+        hidden_states = hidden_states[rel_mask].view(bsz, -1, self.config.hidden_size) # (bsz, n_rels, hidden_size)
+        _, attn_probs = zip(*all_attentions)
+        attn_probs = torch.cat(attn_probs, dim=1)  # (bsz, H*L, seq_len, seq_len)
+        src_pos, tgt_pos = marked_pos_labels[:, :, 0], marked_pos_labels[:, :, 1]  # (bsz, n_rels)
+        holoattn = attn_probs[torch.arange(bsz).unsqueeze(-1), :, tgt_pos, src_pos]  # (bsz, n_rels, H*L)
+        pred_holoattn, pred_hidden = self.rel_head(hidden_states)
+        rel_loss = MSELoss()(pred_holoattn.view(-1), holoattn.detach().view(-1))
+        if not self.training and random.random() < 0.01:
+            def mean(a): return a.float().mean().item()
+            print('rel_loss = %.4f, nonzero_pct = %.3f %.3f %.3f, max = %.3f %.3f' %
+                (rel_loss.item(), mean(pred_hidden > 0), mean(holoattn > 0.3), mean(pred_holoattn > 0),
+                holoattn.max().item(), pred_holoattn.max().item()))
+            rel_labels = labels[rel_mask].view(bsz, -1) # (bsz, n_rels)
+            if True and torch.all(rel_labels > 0):  # rel_tag_type == 'word'
+                n_rels = holoattn.size(1)
+                assert n_rels == 2, str(n_rels)
+                fig, axs = plt.subplots(3, n_rels * 2, sharey=False, figsize=(4 * n_rels * 2, 3.5 * 3))
+                avg_pred_hiddens = []
+                for rel_i in range(n_rels):
+                    rel_token_ids = rel_labels[:, rel_i].bincount().nonzero()[:, 0]
+                    assert len(rel_token_ids) == 2, str(len(rel_token_ids))
+                    for i, rel_token_id in enumerate(rel_token_ids):
+                        rel_sample_indices = (rel_labels[:, rel_i] == rel_token_id).nonzero().squeeze(1)
+                        H, L = self.config.num_attention_heads, self.config.num_hidden_layers
+                        avg_holoattn = holoattn[rel_sample_indices, rel_i].mean(dim=0).view(H, L).t()
+                        avg_pred_holoattn = pred_holoattn[rel_sample_indices, rel_i].mean(dim=0).view(H, L).t()
+                        rel_token = self.tokenizer._convert_id_to_token(rel_token_id.item()).replace('Ġ', '')
+                        xlabel = rel_token + ' ' + str(len(rel_sample_indices))
+                        sns.heatmap(avg_holoattn.detach().cpu(), square=True, cbar=True, ax=axs[0, rel_i * 2 + i]).set_xlabel(xlabel)
+                        sns.heatmap(avg_pred_holoattn.detach().cpu(), square=True, cbar=True, ax=axs[1, rel_i * 2 + i]).set_xlabel(xlabel)
+                        avg_pred_hidden = pred_hidden[rel_sample_indices, rel_i].mean(dim=0, keepdim=True)
+                        avg_pred_hiddens.append(avg_pred_hidden)
+                avg_pred_hiddens = torch.cat(avg_pred_hiddens, dim=0)
+                sns.heatmap(avg_pred_hiddens.detach().cpu(), cbar=True, ax=axs[2, 0])
+                plt.show()
+        labels[rel_mask] = -100
+
+        masked_lm_loss = None
+        if labels is not None:
+            loss_fct = CrossEntropyLoss()  # -100 index = padding token
+            masked_lm_loss = loss_fct(prediction_scores.view(-1, self.config.vocab_size), labels.view(-1))
+
+        masked_lm_loss = rel_loss #* 100.  # XD
+
+        if not return_dict:
+            output = (prediction_scores,) + outputs[2:]  # XD
+            return ((masked_lm_loss,) + output) if masked_lm_loss is not None else output
+
+        return MaskedLMOutput(
+            loss=masked_lm_loss,
+            logits=prediction_scores,
+            hidden_states=outputs.hidden_states,
+            attentions=outputs.attentions,
+        )
+
+class RobertaRelHead(nn.Module):  # XD
+    def __init__(self, config):
+        super().__init__()
+        self.hidden_size = 32
+        self.dense = nn.Linear(config.hidden_size, self.hidden_size)
+        self.dropout = nn.Dropout(0.4 or config.hidden_dropout_prob)
+        self.layer_norm = BertLayerNorm(self.hidden_size, eps=config.layer_norm_eps)
+        self.decoder = nn.Linear(self.hidden_size, config.num_attention_heads * config.num_hidden_layers)
+
+    def forward(self, features, **kwargs):
+        features = self.dropout(features)
+        x = self.dense(features)
+        x = hidden = torch.relu(x)
+        # x = self.layer_norm(x)
+        # x = hidden = nn.Softmax(dim=-1)(x)
+        x = nn.Dropout(0.2)(x)
+        x = self.decoder(x)
+        x = torch.relu(x)
+        return x, hidden
 
 class RobertaLMHead(nn.Module):
     """Roberta Head for masked language modeling."""
