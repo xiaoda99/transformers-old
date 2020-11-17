@@ -20,8 +20,10 @@ import logging
 import warnings
 import random
 # XD
+from collections import OrderedDict
+import json
 import numpy as np
-import matplotlib.pyplot as plt
+import matplotlib.pyplot as p20
 import seaborn as sns
 
 import torch
@@ -342,7 +344,7 @@ class RobertaForMaskedLM(BertPreTrainedModel):
         encoder_attention_mask=None,
         labels=None,
         tc_labels=None,  # XD
-        marked_positions=None,  # XD
+        marked_pos_labels=None,  # XD
         output_attentions=None,
         output_hidden_states=None,
         return_dict=None,
@@ -398,6 +400,124 @@ class RobertaForMaskedLM(BertPreTrainedModel):
             attentions=outputs.attentions,
         )
 
+class Probe(nn.Module):  # XD
+    def __init__(self, input_size, output_size, hidden_size=16):
+        super().__init__()
+        self.dense0 = nn.Linear(input_size, hidden_size)
+        self.act_fn = nn.functional.relu
+        self.dropout = nn.Dropout(0.1)
+        self.dense1 = nn.Linear(hidden_size, output_size)
+
+    def forward(self, states):
+        states = self.dense0(states)
+        states = self.act_fn(states)
+        states = self.dropout(states)
+        return self.dense1(states)
+
+class RobertaForProbing(BertPreTrainedModel):  # XD
+    config_class = RobertaConfig
+    base_model_prefix = "roberta"
+
+    def __init__(self, config):
+        super().__init__(config)
+        self.roberta = RobertaModel(config)
+        self.lm_head = RobertaLMHead(config)
+        # XD
+        self.probes = nn.ModuleDict()
+        # self.probed_rel_id = 0
+        self.num_probe_labels = 8
+        for i in range(0, 3): #, self.config.num_hidden_layers):
+            for probe_i in range(2 + 2):  # cls + sep + src + tgt
+                self.probes[json.dumps((i, probe_i))] = Probe(self.config.hidden_size, self.num_probe_labels)
+        self.roberta.encoder.probe_keys = self.probes.keys()
+
+        self.init_weights()
+
+    def get_output_embeddings(self):
+        return self.lm_head.decoder
+
+    def forward(
+        self,
+        input_ids=None,
+        attention_mask=None,
+        token_type_ids=None,
+        position_ids=None,
+        head_mask=None,
+        inputs_embeds=None,
+        encoder_hidden_states=None,
+        encoder_attention_mask=None,
+        labels=None,
+        tc_labels=None,  # XD
+        marked_pos_labels=None,  # XD
+        output_attentions=None,
+        output_hidden_states=None,
+        return_dict=None,
+        **kwargs
+    ):
+        if "masked_lm_labels" in kwargs:
+            warnings.warn(
+                "The `masked_lm_labels` argument is deprecated and will be removed in a future version, use `labels` instead.",
+                FutureWarning,
+            )
+            labels = kwargs.pop("masked_lm_labels")
+        assert kwargs == {}, f"Unexpected keyword arguments: {list(kwargs.keys())}."
+        return_dict = return_dict if return_dict is not None else self.config.use_return_dict
+
+        # XD
+        # probe_positions = marked_pos_labels[:, self.probed_rel_id]  # (bsz, n_rel, 2) -> (bsz, 2)
+        assert marked_pos_labels.size(1) == 1 and marked_pos_labels.size(2) == 2, str(marked_pos_labels.size())
+        probe_positions = marked_pos_labels[:, 0]  # (bsz, 1, 2) -> (bsz, 2)
+        cls_positions = (input_ids == self.tokenizer.cls_token_id).nonzero()[:, 1:]
+        sep_positions = (input_ids == self.tokenizer.sep_token_id).nonzero()[:, 1:]
+        assert cls_positions.size(0) == sep_positions.size(0) == probe_positions.size(0), \
+            '%d %d %d' % (cls_positions.size(0), sep_positions.size(0), probe_positions.size(0))
+        self.roberta.encoder.probe_positions = torch.cat([cls_positions, sep_positions, probe_positions], dim=-1)  # (bsz, 2 + 2)
+
+        outputs = self.roberta(
+            input_ids,
+            attention_mask=attention_mask,
+            token_type_ids=token_type_ids,
+            position_ids=position_ids,
+            head_mask=head_mask,
+            inputs_embeds=inputs_embeds,
+            encoder_hidden_states=encoder_hidden_states,
+            encoder_attention_mask=encoder_attention_mask,
+            output_attentions=output_attentions,
+            output_hidden_states=output_hidden_states,
+            return_dict=return_dict,
+        )
+        sequence_output = outputs[0].detach()  # XD
+        prediction_scores = self.lm_head(sequence_output)
+
+        masked_lm_loss = None
+        if labels is not None:
+            loss_fct = CrossEntropyLoss()
+            masked_lm_loss = loss_fct(prediction_scores.view(-1, self.config.vocab_size), labels.view(-1))
+
+        # XD
+        probed_hidden_states = outputs[2]  # # L*4 (bsz, hidden_size)
+        probe_logits = [probe(probed_hidden_states[key].detach()) for key, probe in self.probes.items()]
+        probe_logits = torch.stack(probe_logits, dim=1) # L*4 (bsz, num_probe_labels) -> (bsz, L*4, num_probe_labels)
+
+        probe_loss = None
+        if tc_labels is not None:
+            loss_fct = CrossEntropyLoss()
+            bsz, n_probes, _ = probe_logits.size()
+            tc_labels = tc_labels[tc_labels != loss_fct.ignore_index]
+            assert len(tc_labels) == bsz, str(len(tc_labels))
+            tc_labels = tc_labels.unsqueeze(-1).expand(-1, n_probes) # (bsz,) -> (bsz, L*4)
+            probe_loss = loss_fct(probe_logits.reshape(-1, self.num_probe_labels), tc_labels.reshape(-1))
+
+        if not return_dict:
+            output = (prediction_scores, probe_logits) + outputs[2:]
+            return ((probe_loss,) + output) if probe_loss is not None else output
+
+        return MaskedLMOutput(
+            loss=probe_loss,
+            logits=probe_logits,
+            hidden_states=outputs.hidden_states,
+            attentions=outputs.attentions,
+        )
 
 @add_start_docstrings("""RoBERTa Model with a `language modeling` head and a `token classification` head. """, ROBERTA_START_DOCSTRING)
 class RobertaDoubleHeadsModel(BertPreTrainedModel):  # XD

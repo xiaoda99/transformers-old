@@ -25,8 +25,10 @@ from .modeling_utils import PreTrainedModel
 from .optimization import AdamW, get_linear_schedule_with_warmup
 from .trainer_utils import PREFIX_CHECKPOINT_DIR, EvalPrediction, PredictionOutput, TrainOutput, set_seed
 from .training_args import TrainingArguments
-from .modeling_roberta import RobertaDoubleHeadsModel, RobertaDoubleHeadsModel2  # XD
-from .modeling_bert import BertDoubleHeadsModel  # XD
+# XD
+from .modeling_roberta import RobertaDoubleHeadsModel, RobertaDoubleHeadsModel2
+from .modeling_bert import BertDoubleHeadsModel
+from pprint import pprint
 
 _use_native_amp = False
 _use_apex = False
@@ -703,9 +705,10 @@ class Trainer:
                     experiment._log_metrics(logs, step=self.global_step, epoch=self.epoch, framework="transformers")
         output = {**logs, **{"step": self.global_step}}
         # XD
-        for k, v in output.items():
+        for k, v in list(output.items()):
             if any(s in k for s in ["loss", "acc", "epoch"]):
                 output[k] = round(v, 6 if "loss" in k else 3)
+            if 'stat' in k: del output[k]
         if iterator is not None:
             iterator.write(output)
         else:
@@ -1139,15 +1142,18 @@ class Trainer:
         labels = inputs.get("labels")
         if labels is not None:
             labels = labels.detach()
-        if type(model).__name__ in ['BertDoubleHeadsModel', 'RobertaDoubleHeadsModel', 'RobertaDoubleHeadsModel2']:
-        # if any(isinstance(model, classname) for classname in [BertDoubleHeadsModel, RobertaDoubleHeadsModel, RobertaDoubleHeadsModel2]): # XD
+        if type(model).__name__ in ['RobertaForProbing', 'BertDoubleHeadsModel', 'RobertaDoubleHeadsModel', 'RobertaDoubleHeadsModel2']:  # XD
             tc_logits = outputs[2] if has_labels else outputs[1]
             tc_labels = inputs.get("tc_labels")
             if tc_labels is not None:
-                if type(model).__name__ == 'RobertaDoubleHeadsModel2':
-                # if isinstance(model, RobertaDoubleHeadsModel2):
+                if type(model).__name__ in ['RobertaDoubleHeadsModel2']:
                     bsz, seq_len = tc_labels.size()
                     tc_labels = tc_labels[tc_labels != -100].view(bsz, -1)
+                elif type(model).__name__ in ['RobertaForProbing']:
+                    bsz, n_probes, _ = tc_logits.size()
+                    tc_labels = tc_labels[tc_labels != -100]
+                    assert len(tc_labels) == bsz, str(len(tc_labels))
+                    tc_labels = tc_labels.unsqueeze(-1).expand(-1, n_probes) # (bsz,) -> (bsz, L*4)
                 tc_labels = tc_labels.detach()
             return (loss, (logits.detach(), tc_logits.detach()), (labels, tc_labels))
         return (loss, logits.detach(), labels)

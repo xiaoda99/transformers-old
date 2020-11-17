@@ -22,7 +22,10 @@ import os
 import warnings
 from dataclasses import dataclass
 from typing import Optional, Tuple
-import random  # XD
+# XD
+import random
+from collections import OrderedDict
+import json
 
 import torch
 import torch.utils.checkpoint
@@ -464,7 +467,12 @@ class BertEncoder(nn.Module):
         output_attentions = output_attentions or self.add_holoattention  # XD
         all_hidden_states = () if output_hidden_states else None
         all_attentions = () if output_attentions else None
+        # XD
+        probed_hidden_states = OrderedDict() if hasattr(self, 'probe_keys') and self.probe_keys else None
+        save_norms = random.random() < -0.05
+        if save_norms: norms = []
         for i, layer_module in enumerate(self.layer):
+            if save_norms: norms.append(hidden_states.norm(dim=-1).mean().item()) # XD
             if output_hidden_states:
                 all_hidden_states = all_hidden_states + (hidden_states,)
 
@@ -501,15 +509,23 @@ class BertEncoder(nn.Module):
             if self.add_holoattention and i == self.holoattn.num_holoattn_layers - 1:  # XD
                 _, all_attentions = zip(*all_attentions)
                 holoattn_hidden, holoattn_output = self.holoattn(all_attentions, token_type_ids, marked_positions=marked_positions)
-                if random.random() < 0.05: print('hidden_states.abs().mean(), holoattn_output.abs().mean() =', hidden_states.abs().mean().item(), holoattn_output.abs().mean().item())
+                if random.random() < 0.05: print('hidden_states.abs().mean(), holoattn_output.abs().mean() =',
+                    hidden_states.abs().mean().item(), holoattn_output.abs().mean().item())
                 hidden_states += holoattn_output.unsqueeze(1)
                 all_attentions = holoattn_hidden
+            if hasattr(self, 'probe_keys') and self.probe_keys:  # XD
+                for key in self.probe_keys:
+                    layer, probe_i = json.loads(key)
+                    if layer == i:
+                        h = hidden_states[torch.arange(hidden_states.size(0)), self.probe_positions[:, probe_i]] #.detach()
+                        probed_hidden_states[key] = h
 
         if output_hidden_states:
             all_hidden_states = all_hidden_states + (hidden_states,)
+        if save_norms: print('norms =', norms)  #XD
 
         if not return_dict:
-            return tuple(v for v in [hidden_states, all_hidden_states, all_attentions] if v is not None)
+            return tuple(v for v in [hidden_states, all_hidden_states, all_attentions, probed_hidden_states] if v is not None)  # XD
         return BaseModelOutput(
             last_hidden_state=hidden_states, hidden_states=all_hidden_states, attentions=all_attentions
         )
