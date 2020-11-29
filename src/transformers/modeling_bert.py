@@ -176,6 +176,9 @@ ACT2FN = {"gelu": gelu, "relu": torch.nn.functional.relu, "swish": swish, "gelu_
 
 BertLayerNorm = torch.nn.LayerNorm
 
+def get_probed_hidden_states(hidden_states, probe_positions):  # XD
+    return hidden_states[torch.arange(hidden_states.size(0)).unsqueeze(-1), probe_positions]
+
 
 class BertEmbeddings(nn.Module):
     """Construct the embeddings from word, position and token_type embeddings.
@@ -294,6 +297,10 @@ class BertSelfAttention(nn.Module):
         context_layer = context_layer.permute(0, 2, 1, 3).contiguous()
         new_context_layer_shape = context_layer.size()[:-2] + (self.all_head_size,)
         context_layer = context_layer.view(*new_context_layer_shape)
+        if getattr(self, 'output_weighted_values', False):  # XD
+            # (b, H, qlen, klen, 1) * (b, H, 1, klen, d_head) -> (b, H, qlen, klen, d_head)
+            weighted_values = attention_probs.unsqueeze(-1) * value_layer.unsqueeze(2)
+            context_layer = (context_layer, weighted_values)
 
         # outputs = (context_layer, attention_probs) if output_attentions else (context_layer,)
         outputs = (context_layer, attention_scores, attention_probs) if output_attentions else (context_layer,) # XD
@@ -306,8 +313,28 @@ class BertSelfOutput(nn.Module):
         self.dense = nn.Linear(config.hidden_size, config.hidden_size)
         self.LayerNorm = BertLayerNorm(config.hidden_size, eps=config.layer_norm_eps)
         self.dropout = nn.Dropout(config.hidden_dropout_prob)
+        if getattr(self, 'output_weighted_vnorms', False):  # XD
+            self.sliced_weight = self.dense.weight.view(
+                config.num_attention_heads, -1, config.hidden_size)  # (H, d_head, d_model)
+            self.n_chunks = 1
+            self.chunked_sliced_weight = self.sliced_weight.chunk(self.n_chunks, dim=0)
 
     def forward(self, hidden_states, input_tensor):
+        if getattr(self, 'output_weighted_vnorms', False):  # XD
+            assert type(hidden_states) == tuple
+            hidden_states, weighted_values = hidden_states
+            # (b, H, qlen, klen, d_head) -> (b, qlen, H, klen, d_head)
+            weighted_values = weighted_values.permute(0, 2, 1, 3, 4)
+            # (b, qlen, H', klen, d_head) * (H', d_head, d_model) ->
+            # (b, qlen, H', klen, d_model) -> (b, qlen, H', klen)
+            # H' as batch dim
+            weighted_vnorms = [v.matmul(w).norm(dim=-1) for v, w in
+                zip(weighted_values.chunk(self.n_chunks, dim=2), self.chunked_sliced_weight)]
+            # (b, qlen, H, klen) -> (b, H, qlen, klen)
+            self.weighted_vnorms = torch.cat(weighted_vnorms, dim=2).permute(0, 2, 1, 3)
+        if hasattr(self, 'probe_positions'):  # XD
+            self.h = get_probed_hidden_states(hidden_states, self.probe_positions)
+            self.h = self.h.view(self.h.size(0), 12, -1)
         hidden_states = self.dense(hidden_states)
         hidden_states = self.dropout(hidden_states)
         hidden_states = self.LayerNorm(hidden_states + input_tensor)
@@ -468,13 +495,17 @@ class BertEncoder(nn.Module):
         all_hidden_states = () if output_hidden_states else None
         all_attentions = () if output_attentions else None
         # XD
-        probed_hidden_states = OrderedDict() if hasattr(self, 'probe_keys') and self.probe_keys else None
+        probed_hidden_states = OrderedDict() if hasattr(self, 'probe_layers') else None
         save_norms = random.random() < -0.05
         if save_norms: norms = []
         for i, layer_module in enumerate(self.layer):
             if save_norms: norms.append(hidden_states.norm(dim=-1).mean().item()) # XD
             if output_hidden_states:
                 all_hidden_states = all_hidden_states + (hidden_states,)
+            if i in getattr(self, 'probe_layers', []):  # XD
+                module = layer_module.attention.output
+                assert self.probe_positions is not None
+                module.probe_positions = self.probe_positions
 
             if getattr(self.config, "gradient_checkpointing", False):
 
@@ -513,12 +544,9 @@ class BertEncoder(nn.Module):
                     hidden_states.abs().mean().item(), holoattn_output.abs().mean().item())
                 hidden_states += holoattn_output.unsqueeze(1)
                 all_attentions = holoattn_hidden
-            if hasattr(self, 'probe_keys') and self.probe_keys:  # XD
-                for key in self.probe_keys:
-                    layer, probe_i = json.loads(key)
-                    if layer == i:
-                        h = hidden_states[torch.arange(hidden_states.size(0)), self.probe_positions[:, probe_i]] #.detach()
-                        probed_hidden_states[key] = h
+            if i in getattr(self, 'probe_layers', []): # XD
+                probed_hidden_states[i] = module.h if self.per_head_probe else \
+                    get_probed_hidden_states(hidden_states, self.probe_positions)
 
         if output_hidden_states:
             all_hidden_states = all_hidden_states + (hidden_states,)

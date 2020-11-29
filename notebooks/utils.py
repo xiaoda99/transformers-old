@@ -87,26 +87,26 @@ def rejoin_tokens(tokens):
 
 token2marker = {'same': '*', 'opposite': '*', 'former': '#', 'latter': '#'}
 
-def get_matched_marker(token, markers):
+def get_matched_marker(token, is_marker=False): #, markers):
     token = token.replace('Ġ', '')
-    if token in markers:
+    if token in token2marker.values():
         return token
-    if token in token2marker:
+    if not is_marker and token in token2marker:
         return token2marker[token]
     return None
 
-def process_markers(tokens, markers, pos_offset=0):
+def process_markers(tokens, pos_offset=0):
     out_tokens = []
     marked_positions = defaultdict(list)
     pos = 0
     for token in tokens:
-        marker = get_matched_marker(token, markers.values())
+        marker = get_matched_marker(token, is_marker=True)
         if marker:
             marked_positions[marker].append(pos + pos_offset)
         else:
             out_tokens.append(token)
             pos += 1
-    return out_tokens, marked_positions
+    return out_tokens, dict(marked_positions) if marked_positions else None
 
 def process_mask(tokens, tokenizer): #, markers, marked_positions):
     output_label = []
@@ -150,23 +150,21 @@ def process_tag(tokens, tokenizer): #, markers, marked_positions):
     return output_tokens, output_label, tagged_tokens  # marked_pos_labels
 
 def convert_example_to_features(example, max_seq_length, tokenizer, max_noise_len=0,
-                                markers=None, has_tags=False):
+                                has_tags=False):
     cls_token, sep_token = tokenizer.cls_token, tokenizer.sep_token
     tokens_a = example.tokens_a
     tokens_b = example.tokens_b
 
-    marked_positions = None
-    if markers is not None:
-        tokens_a, marked_positions = process_markers(tokens_a, markers, pos_offset=1)
+    tokens_a, marked_positions = process_markers(tokens_a, pos_offset=1)
     if has_tags:
         tokens_a, t1_tag, tagged_tokens = process_tag(tokens_a, tokenizer)
         tag_ids = [-1] + t1_tag + [-1]
     tokens_a, t1_label, masked_tokens = process_mask(tokens_a, tokenizer)
     lm_label_ids = [-1] + t1_label + [-1]
-    if markers is not None:
-        marked_tokens = tagged_tokens if has_tags else masked_tokens
-        marked_pos_labels = [marked_positions[get_matched_marker(token, markers.values())]
-            for token in marked_tokens]
+    marked_tokens = tagged_tokens if has_tags else \
+        [token for token in masked_tokens if get_matched_marker(token)]
+    marked_pos_labels = [marked_positions[get_matched_marker(token)]
+        for token in marked_tokens] if marked_tokens else None
 
     tokens = []
     segment_ids = []
@@ -200,18 +198,18 @@ def convert_example_to_features(example, max_seq_length, tokenizer, max_noise_le
         cur_pos_id += randint(0, max_noise_len)
 
     if tokens_b is not None and len(tokens_b) > 0:
-        if markers is not None:
-            tokens_b, t2_marked_positions = process_markers(tokens_b, markers, pos_offset=len(tokens))
-            # marked_positions += t2_marked_positions
+        tokens_b, t2_marked_positions = process_markers(tokens_b, pos_offset=len(tokens))
+        if marked_positions and t2_marked_positions:
             for marker in t2_marked_positions:
                 marked_positions[marker] += t2_marked_positions[marker]
         if has_tags:
             tokens_b, t2_tag, tagged_tokens = process_tag(tokens_b, tokenizer)
             tag_ids += (t2_tag + [-1])
         tokens_b, t2_label, masked_tokens = process_mask(tokens_b, tokenizer)
-        if markers is not None:
-            marked_tokens = tagged_tokens if has_tags else masked_tokens
-            marked_pos_labels += [marked_positions[get_matched_marker(token, markers.values())]
+        marked_tokens = tagged_tokens if has_tags else \
+            [token for token in masked_tokens if get_matched_marker(token)]
+        if marked_pos_labels and marked_tokens:
+            marked_pos_labels += [marked_positions[get_matched_marker(token)]
                 for token in marked_tokens]
         lm_label_ids += (t2_label + [-1])
 
@@ -260,7 +258,7 @@ def convert_example_to_features(example, max_seq_length, tokenizer, max_noise_le
                              labels=lm_label_ids,
                              )
     if has_tags: features.tc_labels = tag_ids
-    if markers is not None:
+    if marked_pos_labels is not None:
         # features.head_mask = marked_positions
         features.marked_pos_labels = marked_pos_labels
     if example.guid <= -1:
@@ -319,7 +317,7 @@ class CHILDDataset(Dataset):
         self.features = []
         for _ in range(n_replicas):
             self.features += [convert_example_to_features(example, max_seq_len, tokenizer,
-                            markers=markers, has_tags=has_tags, max_noise_len=max_noise_len)
+                            has_tags=has_tags, max_noise_len=max_noise_len)
                  for example in examples]
 
     def split_sent(self, line):
@@ -348,7 +346,7 @@ def plot_head_attn(attn, tokens, ax1=None, marked_positions=[]):
     if ax1 is None: ax1 = plt.gca()
     for i in range(attn.size(0)):
         for j in range(attn.size(1)):
-            if j in [0, attn.size(1) - 1] or attn[i, j].item() < 0.2: continue
+            # if j in [0, attn.size(1) - 1] or attn[i, j].item() < 0.2: continue
             plt.plot([0, 1], [i, j], color='b', alpha=attn[i, j].item())
     ax1.set_xticks([0, 1])
     ax1.set_xlim(0, 1)

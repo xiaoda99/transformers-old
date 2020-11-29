@@ -781,7 +781,8 @@ class PreTrainedModel(nn.Module, ModuleUtilsMixin, GenerationMixin):
             # Instantiate model.
             model = cls(config, *model_args, **model_kwargs)
 
-        if pretrained_model_name_or_path in cls.state_dicts: state_dict = cls.state_dicts[pretrained_model_name_or_path]  # XD
+        if state_dict is None and pretrained_model_name_or_path in cls.state_dicts:    # XD
+            state_dict = cls.state_dicts[pretrained_model_name_or_path]
         if state_dict is None and not from_tf:
             try:
                 from time import time; t0 = time()  # XD

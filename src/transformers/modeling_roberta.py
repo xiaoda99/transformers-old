@@ -403,15 +403,16 @@ class RobertaForMaskedLM(BertPreTrainedModel):
 class Probe(nn.Module):  # XD
     def __init__(self, input_size, output_size, hidden_size=16):
         super().__init__()
-        self.dense0 = nn.Linear(input_size, hidden_size)
-        self.act_fn = nn.functional.relu
-        self.dropout = nn.Dropout(0.1)
-        self.dense1 = nn.Linear(hidden_size, output_size)
+        # self.dense0 = nn.Linear(input_size, hidden_size)
+        # self.act_fn = nn.functional.relu
+        # self.dropout = nn.Dropout(0.1)
+        # self.dense1 = nn.Linear(hidden_size, output_size)
+        self.dense1 = nn.Linear(input_size, output_size)
 
     def forward(self, states):
-        states = self.dense0(states)
-        states = self.act_fn(states)
-        states = self.dropout(states)
+        # states = self.dense0(states)
+        # states = self.act_fn(states)b
+        # states = self.dropout(states)
         return self.dense1(states)
 
 class RobertaForProbing(BertPreTrainedModel):  # XD
@@ -425,53 +426,47 @@ class RobertaForProbing(BertPreTrainedModel):  # XD
         # XD
         self.probes = nn.ModuleDict()
         # self.probed_rel_id = 0
-        self.num_probe_labels = 8
-        for i in range(0, 3): #, self.config.num_hidden_layers):
-            for probe_i in range(2 + 2):  # cls + sep + src + tgt
-                self.probes[json.dumps((i, probe_i))] = Probe(self.config.hidden_size, self.num_probe_labels)
-        self.roberta.encoder.probe_keys = self.probes.keys()
-
+        self.per_head_probe = False
+        self.num_probe_labels = 2
+        # self.probe_layers = list(range(3, 6))
+        self.probe_layers = list(range(0, 10))
+        for i in self.probe_layers: #, self.config.num_hidden_layers):
+            for probe_i in range(self.config.num_attention_heads if self.per_head_probe else 6):
+                hidden_size = self.config.hidden_size
+                if self.per_head_probe: hidden_size = hidden_size // self.config.num_attention_heads
+                self.probes[json.dumps((i, probe_i))] = Probe(hidden_size, self.num_probe_labels)
+        self.roberta.encoder.probe_layers = self.probe_layers
+        self.roberta.encoder.per_head_probe = self.per_head_probe
+        # self.roberta.encoder.probe_keys = self.probes.keys()
         self.init_weights()
 
     def get_output_embeddings(self):
         return self.lm_head.decoder
 
-    def forward(
-        self,
-        input_ids=None,
-        attention_mask=None,
-        token_type_ids=None,
-        position_ids=None,
-        head_mask=None,
-        inputs_embeds=None,
-        encoder_hidden_states=None,
-        encoder_attention_mask=None,
-        labels=None,
-        tc_labels=None,  # XD
-        marked_pos_labels=None,  # XD
-        output_attentions=None,
-        output_hidden_states=None,
-        return_dict=None,
-        **kwargs
-    ):
-        if "masked_lm_labels" in kwargs:
-            warnings.warn(
-                "The `masked_lm_labels` argument is deprecated and will be removed in a future version, use `labels` instead.",
-                FutureWarning,
-            )
-            labels = kwargs.pop("masked_lm_labels")
-        assert kwargs == {}, f"Unexpected keyword arguments: {list(kwargs.keys())}."
+    def forward(self, input_ids=None, attention_mask=None,
+        token_type_ids=None, position_ids=None,
+        marked_pos_labels=None, probe_positions=None,  # XD
+        head_mask=None, inputs_embeds=None,
+        encoder_hidden_states=None, encoder_attention_mask=None,
+        labels=None, tc_labels=None, detach=True,  # XD
+        output_attentions=None, output_hidden_states=None,
+        return_dict=None, **kwargs):
         return_dict = return_dict if return_dict is not None else self.config.use_return_dict
 
         # XD
-        # probe_positions = marked_pos_labels[:, self.probed_rel_id]  # (bsz, n_rel, 2) -> (bsz, 2)
         assert marked_pos_labels.size(1) == 1 and marked_pos_labels.size(2) == 2, str(marked_pos_labels.size())
-        probe_positions = marked_pos_labels[:, 0]  # (bsz, 1, 2) -> (bsz, 2)
+        marked_positions = marked_pos_labels[:, 0]  # (bsz, 1, 2) -> (bsz, 2)
         cls_positions = (input_ids == self.tokenizer.cls_token_id).nonzero()[:, 1:]
         sep_positions = (input_ids == self.tokenizer.sep_token_id).nonzero()[:, 1:]
-        assert cls_positions.size(0) == sep_positions.size(0) == probe_positions.size(0), \
-            '%d %d %d' % (cls_positions.size(0), sep_positions.size(0), probe_positions.size(0))
-        self.roberta.encoder.probe_positions = torch.cat([cls_positions, sep_positions, probe_positions], dim=-1)  # (bsz, 2 + 2)
+        be_positions = torch.ones_like(cls_positions) * 2
+        so_positions = (input_ids == self.tokenizer._convert_token_to_id('Ġso')).nonzero()[:, 1:]
+        be2_positions = so_positions + 2
+        qmark_positions = (input_ids == self.tokenizer._convert_token_to_id('Ġ?')).nonzero()[:, 1:]
+        mask_positions = (input_ids == self.tokenizer.mask_token_id).nonzero()[:, 1:]
+        self.roberta.encoder.probe_positions = mask_positions if self.per_head_probe else torch.cat(
+            [be_positions, so_positions - 1, so_positions, be2_positions, qmark_positions, mask_positions], dim=-1)
+        # assert probe_positions is not None
+        # self.roberta.encoder.probe_positions = probe_positions
 
         outputs = self.roberta(
             input_ids,
@@ -495,8 +490,14 @@ class RobertaForProbing(BertPreTrainedModel):  # XD
             masked_lm_loss = loss_fct(prediction_scores.view(-1, self.config.vocab_size), labels.view(-1))
 
         # XD
-        probed_hidden_states = outputs[2]  # # L*4 (bsz, hidden_size)
-        probe_logits = [probe(probed_hidden_states[key].detach()) for key, probe in self.probes.items()]
+        probed_hidden_states = outputs[-1]  # L * (bsz, 4, hidden_size)
+        if detach:
+            probed_hidden_states = {k: v.detach() for k, v in probed_hidden_states.items()}
+        probe_logits = []
+        for key, probe in self.probes.items():
+            layer_i, probe_i = json.loads(key)
+            # print('layer_i, probe_i =', layer_i, probe_i)
+            probe_logits.append(probe(probed_hidden_states[layer_i][:, probe_i]))
         probe_logits = torch.stack(probe_logits, dim=1) # L*4 (bsz, num_probe_labels) -> (bsz, L*4, num_probe_labels)
 
         probe_loss = None
