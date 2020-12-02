@@ -373,6 +373,9 @@ def normalize_tokens(tokens):
             else token.replace('Ġ', '').replace('<mask>', '_')
             for token in tokens]
 
+def normalize(a): return a / a.norm()
+
+
 import string
 P_template = '{ent0} {rel} {ent1}'
 transitive_template = '{p0} and {p1} , so {Q} ? {conj} .'

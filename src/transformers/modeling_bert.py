@@ -286,6 +286,20 @@ class BertSelfAttention(nn.Module):
         # This is actually dropping out entire tokens to attend to, which might
         # seem a bit unusual, but is taken from the original Transformer paper.
         attention_probs = self.dropout(attention_probs)
+        if hasattr(self, 'probe_positions'):  # XD
+            assert self.probe_positions.size(1) == 1, str(self.probe_positions.size(1))  # mask_position
+            attn_mask = torch.ones_like(attention_probs)
+            bi, pi = torch.arange(attention_probs.size(0)), self.probe_positions[:, 0]
+            show = random.random() < 0.1 and attention_probs.max().item() <= 1  # eval mode
+            # if show and self.layer_idx == 4:
+                # print(self.layer_idx, 'cls', attention_probs[bi, :, pi, 0].mean(0))
+                # print(self.layer_idx, 'be ', attention_probs[bi, :, pi, 2].mean(0))
+                # print(self.layer_idx, 'sep', attention_probs[bi, :, pi, pi + 2]) #.mean(0))
+            attn_mask[bi, :, pi, 0] = 0.  # cls
+            attn_mask[bi, :, pi, 2] = 0.  # be
+            attn_mask[bi, :, pi, pi + 2] = 0.  # sep
+            attention_probs = attention_probs * attn_mask
+            if show: print(self.layer_idx, attention_probs[bi, :, pi, :].sum(-1).mean(0))
 
         # Mask heads if we want to
         if head_mask is not None:
@@ -333,8 +347,8 @@ class BertSelfOutput(nn.Module):
             # (b, qlen, H, klen) -> (b, H, qlen, klen)
             self.weighted_vnorms = torch.cat(weighted_vnorms, dim=2).permute(0, 2, 1, 3)
         if hasattr(self, 'probe_positions'):  # XD
-            self.h = get_probed_hidden_states(hidden_states, self.probe_positions)
-            self.h = self.h.view(self.h.size(0), 12, -1)
+            self.hidden = get_probed_hidden_states(hidden_states, self.probe_positions)
+            self.hidden = self.hidden.view(self.hidden.size(0), 12, -1)
         hidden_states = self.dense(hidden_states)
         hidden_states = self.dropout(hidden_states)
         hidden_states = self.LayerNorm(hidden_states + input_tensor)
@@ -503,9 +517,11 @@ class BertEncoder(nn.Module):
             if output_hidden_states:
                 all_hidden_states = all_hidden_states + (hidden_states,)
             if i in getattr(self, 'probe_layers', []):  # XD
-                module = layer_module.attention.output
                 assert self.probe_positions is not None
+                module = layer_module.attention.output
                 module.probe_positions = self.probe_positions
+                # layer_module.attention.self.probe_positions = self.probe_positions
+                # layer_module.attention.self.layer_idx = i
 
             if getattr(self.config, "gradient_checkpointing", False):
 
@@ -545,7 +561,7 @@ class BertEncoder(nn.Module):
                 hidden_states += holoattn_output.unsqueeze(1)
                 all_attentions = holoattn_hidden
             if i in getattr(self, 'probe_layers', []): # XD
-                probed_hidden_states[i] = module.h if self.per_head_probe else \
+                probed_hidden_states[i] = module.hidden if self.per_head_probe else \
                     get_probed_hidden_states(hidden_states, self.probe_positions)
 
         if output_hidden_states:

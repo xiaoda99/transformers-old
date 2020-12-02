@@ -133,6 +133,9 @@ def get_tpu_sampler(dataset: Dataset):
         return RandomSampler(dataset)
     return DistributedSampler(dataset, num_replicas=xm.xrt_world_size(), rank=xm.get_ordinal())
 
+def get_mean_pred_prob(s):  # XD
+    probs = [float(t[:-1]) for t in s.split() if t.endswith(',')]
+    return round(sum(probs) / len(probs), 2)
 
 class Trainer:
     """
@@ -708,11 +711,20 @@ class Trainer:
         for k, v in list(output.items()):
             if any(s in k for s in ["loss", "acc", "epoch"]):
                 output[k] = round(v, 6 if "loss" in k else 3)
-            if 'stat' in k: del output[k]
+            # if 'stat' in k: del output[k]
         if iterator is not None:
             iterator.write(output)
         else:
-            print(output)
+            if not any('eval' in k for k in output.keys()):
+                print(output)
+            else:  # XD
+                n_layers, n_probe_positions = 3, 12
+                for i in range(n_layers):
+                    print(i, end='  ')
+                    for j in range(n_probe_positions):
+                        n = i * n_probe_positions + j
+                        print('%.2f/%.2f' % (output['eval_acc_tc' + str(n)], get_mean_pred_prob(output['eval_stat_tc' + str(n)])), end='  ')
+                    print()
 
     def _prepare_inputs(
         self, inputs: Dict[str, Union[torch.Tensor, Any]], model: nn.Module

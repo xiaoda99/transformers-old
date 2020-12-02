@@ -426,10 +426,10 @@ class RobertaForProbing(BertPreTrainedModel):  # XD
         # XD
         self.probes = nn.ModuleDict()
         # self.probed_rel_id = 0
-        self.per_head_probe = False
+        self.per_head_probe = True
         self.num_probe_labels = 2
         # self.probe_layers = list(range(3, 6))
-        self.probe_layers = list(range(0, 10))
+        self.probe_layers = list(range(6, 9))
         for i in self.probe_layers: #, self.config.num_hidden_layers):
             for probe_i in range(self.config.num_attention_heads if self.per_head_probe else 6):
                 hidden_size = self.config.hidden_size
@@ -444,13 +444,13 @@ class RobertaForProbing(BertPreTrainedModel):  # XD
         return self.lm_head.decoder
 
     def forward(self, input_ids=None, attention_mask=None,
-        token_type_ids=None, position_ids=None,
-        marked_pos_labels=None, probe_positions=None,  # XD
-        head_mask=None, inputs_embeds=None,
-        encoder_hidden_states=None, encoder_attention_mask=None,
-        labels=None, tc_labels=None, detach=True,  # XD
-        output_attentions=None, output_hidden_states=None,
-        return_dict=None, **kwargs):
+                token_type_ids=None, position_ids=None,
+                marked_pos_labels=None, probe_positions=None,  # XD
+                head_mask=None, inputs_embeds=None,
+                encoder_hidden_states=None, encoder_attention_mask=None,
+                labels=None, tc_labels=None, detach=True,  # XD
+                output_attentions=None, output_hidden_states=None,
+                return_dict=None, **kwargs):
         return_dict = return_dict if return_dict is not None else self.config.use_return_dict
 
         # XD
@@ -463,8 +463,9 @@ class RobertaForProbing(BertPreTrainedModel):  # XD
         be2_positions = so_positions + 2
         qmark_positions = (input_ids == self.tokenizer._convert_token_to_id('Ġ?')).nonzero()[:, 1:]
         mask_positions = (input_ids == self.tokenizer.mask_token_id).nonzero()[:, 1:]
-        self.roberta.encoder.probe_positions = mask_positions if self.per_head_probe else torch.cat(
-            [be_positions, so_positions - 1, so_positions, be2_positions, qmark_positions, mask_positions], dim=-1)
+        positions = mask_positions
+        self.roberta.encoder.probe_positions = positions if self.per_head_probe else torch.cat(
+            [marked_positions, cls_positions, sep_positions, so_positions, positions], dim=-1)
         # assert probe_positions is not None
         # self.roberta.encoder.probe_positions = probe_positions
 
