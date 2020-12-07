@@ -316,8 +316,8 @@ class BertSelfAttention(nn.Module):
             weighted_values = attention_probs.unsqueeze(-1) * value_layer.unsqueeze(2)
             context_layer = (context_layer, weighted_values)
 
-        # outputs = (context_layer, attention_probs) if output_attentions else (context_layer,)
-        outputs = (context_layer, attention_scores, attention_probs) if output_attentions else (context_layer,) # XD
+        outputs = (context_layer, attention_probs) if output_attentions else (context_layer,)
+        # outputs = (context_layer, attention_scores, attention_probs) if output_attentions else (context_layer,) # XD
         return outputs
 
 
@@ -348,7 +348,7 @@ class BertSelfOutput(nn.Module):
             self.weighted_vnorms = torch.cat(weighted_vnorms, dim=2).permute(0, 2, 1, 3)
         if hasattr(self, 'probe_positions'):  # XD
             self.hidden = get_probed_hidden_states(hidden_states, self.probe_positions)
-            self.hidden = self.hidden.view(self.hidden.size(0), 12, -1)
+            if self.per_head_probe: self.hidden = self.hidden.view(self.hidden.size(0), 12, -1)
         hidden_states = self.dense(hidden_states)
         hidden_states = self.dropout(hidden_states)
         hidden_states = self.LayerNorm(hidden_states + input_tensor)
@@ -520,6 +520,7 @@ class BertEncoder(nn.Module):
                 assert self.probe_positions is not None
                 module = layer_module.attention.output
                 module.probe_positions = self.probe_positions
+                module.per_head_probe = self.per_head_probe
                 # layer_module.attention.self.probe_positions = self.probe_positions
                 # layer_module.attention.self.layer_idx = i
 
@@ -550,9 +551,9 @@ class BertEncoder(nn.Module):
                 )
             hidden_states = layer_outputs[0]
             if output_attentions:
-                # all_attentions = all_attentions + (layer_outputs[1],)
-                if not self.add_holoattention or i < self.holoattn.num_holoattn_layers:   # XD
-                    all_attentions = all_attentions + (layer_outputs[1:],)
+                all_attentions = all_attentions + (layer_outputs[1],)
+                # if not self.add_holoattention or i < self.holoattn.num_holoattn_layers:   # XD
+                #     all_attentions = all_attentions + (layer_outputs[1:],)
             if self.add_holoattention and i == self.holoattn.num_holoattn_layers - 1:  # XD
                 _, all_attentions = zip(*all_attentions)
                 holoattn_hidden, holoattn_output = self.holoattn(all_attentions, token_type_ids, marked_positions=marked_positions)
@@ -561,7 +562,7 @@ class BertEncoder(nn.Module):
                 hidden_states += holoattn_output.unsqueeze(1)
                 all_attentions = holoattn_hidden
             if i in getattr(self, 'probe_layers', []): # XD
-                probed_hidden_states[i] = module.hidden if self.per_head_probe else \
+                probed_hidden_states[i] = module.hidden if True or self.per_head_probe else \
                     get_probed_hidden_states(hidden_states, self.probe_positions)
 
         if output_hidden_states:

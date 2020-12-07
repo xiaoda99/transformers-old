@@ -715,16 +715,16 @@ class Trainer:
         if iterator is not None:
             iterator.write(output)
         else:
-            if not any('eval' in k for k in output.keys()):
-                print(output)
-            else:  # XD
-                n_layers, n_probe_positions = 3, 12
-                for i in range(n_layers):
-                    print(i, end='  ')
-                    for j in range(n_probe_positions):
-                        n = i * n_probe_positions + j
-                        print('%.2f/%.2f' % (output['eval_acc_tc' + str(n)], get_mean_pred_prob(output['eval_stat_tc' + str(n)])), end='  ')
+            if any('eval' in k for k in output.keys()):  # XD
+                for i, layer in enumerate(self.model.probe_layers):
+                    print('%2d' % layer, end='  ')
+                    for j in range(self.model.n_probe_positions):
+                        n = i * self.model.n_probe_positions + j
+                        print('%.2f/%.2f' % (output['eval_acc_tc' + str(n)],
+                            get_mean_pred_prob(output['eval_stat_tc' + str(n)])), end='  ')
                     print()
+            else:
+                print(output)
 
     def _prepare_inputs(
         self, inputs: Dict[str, Union[torch.Tensor, Any]], model: nn.Module

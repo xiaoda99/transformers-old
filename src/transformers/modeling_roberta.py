@@ -425,19 +425,17 @@ class RobertaForProbing(BertPreTrainedModel):  # XD
         self.lm_head = RobertaLMHead(config)
         # XD
         self.probes = nn.ModuleDict()
-        # self.probed_rel_id = 0
-        self.per_head_probe = True
         self.num_probe_labels = 2
-        # self.probe_layers = list(range(3, 6))
-        self.probe_layers = list(range(6, 9))
-        for i in self.probe_layers: #, self.config.num_hidden_layers):
-            for probe_i in range(self.config.num_attention_heads if self.per_head_probe else 6):
+        self.per_head_probe = True
+        self.probe_layers = list(range(6, 7))
+        self.n_probe_positions = self.config.num_attention_heads if self.per_head_probe else 6
+        for i in self.probe_layers:
+            for probe_i in range(self.n_probe_positions):
                 hidden_size = self.config.hidden_size
                 if self.per_head_probe: hidden_size = hidden_size // self.config.num_attention_heads
                 self.probes[json.dumps((i, probe_i))] = Probe(hidden_size, self.num_probe_labels)
         self.roberta.encoder.probe_layers = self.probe_layers
         self.roberta.encoder.per_head_probe = self.per_head_probe
-        # self.roberta.encoder.probe_keys = self.probes.keys()
         self.init_weights()
 
     def get_output_embeddings(self):
@@ -463,9 +461,8 @@ class RobertaForProbing(BertPreTrainedModel):  # XD
         be2_positions = so_positions + 2
         qmark_positions = (input_ids == self.tokenizer._convert_token_to_id('Ġ?')).nonzero()[:, 1:]
         mask_positions = (input_ids == self.tokenizer.mask_token_id).nonzero()[:, 1:]
-        positions = mask_positions
-        self.roberta.encoder.probe_positions = positions if self.per_head_probe else torch.cat(
-            [marked_positions, cls_positions, sep_positions, so_positions, positions], dim=-1)
+        self.roberta.encoder.probe_positions = so_positions if self.per_head_probe else torch.cat(
+            [marked_positions, cls_positions, sep_positions, so_positions, mask_positions], dim=-1)
         # assert probe_positions is not None
         # self.roberta.encoder.probe_positions = probe_positions
 
