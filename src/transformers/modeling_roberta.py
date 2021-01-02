@@ -23,8 +23,7 @@ import random
 from collections import OrderedDict
 import json
 import numpy as np
-import matplotlib.pyplot as p20
-import seaborn as sns
+#import matplotlib.pyplot as p20
 
 import torch
 import torch.nn as nn
@@ -789,6 +788,7 @@ class RobertaDoubleHeadsModel3(BertPreTrainedModel):  # XD
                 holoattn.max().item(), pred_holoattn.max().item()))
             rel_labels = labels[rel_mask].view(bsz, -1) # (bsz, n_rels)
             if True and torch.all(rel_labels > 0):  # rel_tag_type == 'word'
+                import seaborn as sns
                 n_rels = holoattn.size(1)
                 assert n_rels == 2, str(n_rels)
                 fig, axs = plt.subplots(3, n_rels * 2, sharey=False, figsize=(4 * n_rels * 2, 3.5 * 3))

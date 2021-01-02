@@ -46,11 +46,11 @@ def balance(cores, relation_labels):
     return join_lists(cores_by_type.values())
 
 class InputExample(object):
-    def __init__(self, guid, tokens_a, tokens_b=None, is_next=None, lm_labels=None):
+    def __init__(self, guid, tokens_a, tokens_b=None, label=None, lm_labels=None):
         self.guid = guid
         self.tokens_a = tokens_a
         self.tokens_b = tokens_b
-        self.is_next = is_next  # nextSentence
+        self.label = label  # nextSentence
         self.lm_labels = lm_labels  # masked words for language model
 
 class InputFeatures(object):
@@ -86,6 +86,8 @@ def rejoin_tokens(tokens):
 #     return tokens, []
 
 token2marker = {'same': '*', 'opposite': '*', 'former': '#', 'latter': '#'}
+# nli_label2index = {'e': 0, 'n': 1, 'c': 2, 'h': -1,} # roberta-large-anli
+nli_label2index = {'c': 0, 'n': 1, 'e': 2, 'h': -1,}  # roberta-large-mnli
 
 def get_matched_marker(token, is_marker=False): #, markers):
     token = token.replace('Ġ', '')
@@ -194,10 +196,19 @@ def convert_example_to_features(example, max_seq_length, tokenizer, max_noise_le
     # XD
     pos_ids.append(cur_pos_id)
     cur_pos_id += 1
-    if max_noise_len > 0:
-        cur_pos_id += randint(0, max_noise_len)
 
     if tokens_b is not None and len(tokens_b) > 0:
+        segB_id = 1
+        if sep_token == '</s>':  # RoBERTa
+            tokens.append(sep_token)
+            segment_ids.append(0)
+            pos_ids.append(cur_pos_id)
+            cur_pos_id += 1
+            lm_label_ids += [-1]
+            segB_id = 0
+        if max_noise_len > 0:
+            cur_pos_id += randint(0, max_noise_len)
+
         tokens_b, t2_marked_positions = process_markers(tokens_b, pos_offset=len(tokens))
         if marked_positions and t2_marked_positions:
             for marker in t2_marked_positions:
@@ -215,11 +226,11 @@ def convert_example_to_features(example, max_seq_length, tokenizer, max_noise_le
 
         for token in tokens_b:
             tokens.append(token)
-            segment_ids.append(1)
+            segment_ids.append(segB_id)
             inc_pos(token)  # XD
 
         tokens.append(sep_token)  # ("[SEP]")
-        segment_ids.append(1)
+        segment_ids.append(segB_id)
         pos_ids.append(cur_pos_id)  # XD
 
     input_ids = tokenizer.convert_tokens_to_ids(tokens)
@@ -240,7 +251,7 @@ def convert_example_to_features(example, max_seq_length, tokenizer, max_noise_le
     assert len(input_ids) == max_seq_length, '%d != %d' % (len(input_ids), max_seq_length)
     assert len(input_mask) == max_seq_length
     assert len(segment_ids) == max_seq_length
-    assert len(lm_label_ids) == max_seq_length
+    assert len(lm_label_ids) == max_seq_length, '%d != %d' % (len(lm_label_ids), max_seq_length)
     # XD
     assert len(pos_ids) == max_seq_length
     # if markers is not None:
@@ -255,7 +266,7 @@ def convert_example_to_features(example, max_seq_length, tokenizer, max_noise_le
                              attention_mask=input_mask,
                              token_type_ids=segment_ids,
                              position_ids=pos_ids,  # XD
-                             labels=lm_label_ids,
+                             labels=lm_label_ids if example.label is None else nli_label2index[example.label],
                              )
     if has_tags: features.tc_labels = tag_ids
     if marked_pos_labels is not None:
@@ -303,16 +314,17 @@ class CHILDDataset(Dataset):
         if mode in [Split.dev, Split.test]: all_lines = sample(all_lines, 10000)
         examples = []
         for i, line in enumerate(all_lines):
-            t1, t2, is_next_label = self.split_sent(line)
+            t1, t2, label = self.split_sent(line)
             tokens_a = rejoin_tokens(tokenizer.tokenize(t1))
             tokens_b = rejoin_tokens(tokenizer.tokenize(t2)) if t2 is not None else None
-            example = InputExample(guid=i, tokens_a=tokens_a, tokens_b=tokens_b, is_next=is_next_label)
+            example = InputExample(guid=i, tokens_a=tokens_a, tokens_b=tokens_b, label=label)
             examples.append(example)
 
         if max_seq_len is None:
             max_seq_len = max([len(example.tokens_a) + len(example.tokens_b) + 3
                 if example.tokens_b is not None else len(example.tokens_a) + 2
                 for example in examples])
+        if tokenizer.sep_token == '</s>': max_seq_len += 1  # RoBERTa
 
         self.features = []
         for _ in range(n_replicas):
@@ -320,15 +332,16 @@ class CHILDDataset(Dataset):
                             has_tags=has_tags, max_noise_len=max_noise_len)
                  for example in examples]
 
-    def split_sent(self, line):
-        label = 0
-        if "|||" in line:
-            t1, t2 = line.split("|||")
-            assert len(t1) > 0 and len(t2) > 0, "%d %d" % (len(t1), len(t2))
+    def split_sent(self, line, separator='|||'):
+        if separator in line:
+            n_sep = line.count(separator)
+            assert n_sep in [1, 2]
+            t1, t2, label = line.split(separator) + [None,] \
+                if n_sep == 1 else line.split(separator)
+            assert len(t1) > 0 and len(t2) > 0 and (len(label) > 0 or label is None), \
+                "%d %d %s" % (len(t1), len(t2), label)
         else:
-            # assert self.one_sent
-            # t1, t2 = line.strip(), None
-            t1, t2 = line, None
+            t1, t2, label = line, None, None
         return t1, t2, label
 
     def __len__(self):

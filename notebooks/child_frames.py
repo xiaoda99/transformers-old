@@ -5,7 +5,7 @@ frames = [
     [['dynamic'], ['static']],
     [['mortal'], ['immortal']],
     [['occupied'], ['vacant']],
-    [['intelligent', 'wiser', 'smart'], ['stupid']],
+    [['intelligent', 'wise', 'smart'], ['stupid']],
     [['arrogant'], ['modest', 'timid']],
     [['benevolent'], ['vicious']],
     [['educated', 'knowledgeable'], ['ignorant']],

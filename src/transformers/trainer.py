@@ -538,7 +538,7 @@ class Trainer:
         train_iterator = trange(
             epochs_trained, int(num_train_epochs), desc="Epoch", disable=not self.is_local_process_zero()
         )
-#         self.evaluate()  # XD
+        self.evaluate()  # XD
         for epoch in train_iterator:
             if isinstance(train_dataloader, DataLoader) and isinstance(train_dataloader.sampler, DistributedSampler):
                 train_dataloader.sampler.set_epoch(epoch)
@@ -715,7 +715,7 @@ class Trainer:
         if iterator is not None:
             iterator.write(output)
         else:
-            if any('eval' in k for k in output.keys()):  # XD
+            if any('eval' in k for k in output.keys()) and hasattr(self.model, 'probe_layers'):  # XD
                 for i, layer in enumerate(self.model.probe_layers):
                     print('%2d' % layer, end='  ')
                     for j in range(self.model.n_probe_positions):
@@ -1020,6 +1020,9 @@ class Trainer:
             # XD
             all_logits, all_labels = (logits, labels) if isinstance(logits, tuple) else ((logits,), (labels,))
             for head_name, logits, labels in zip(('', 'tc'), all_logits, all_labels):
+                if logits.dim() == 2:  # XXXForSequenceClassification
+                    assert labels.dim() == 1, str(labels.size())
+                    logits, labels = logits.unsqueeze(1), labels.unsqueeze(1)
                 bsz, seq_len, vocab_size = logits.size()
                 masks = labels != -100
                 n_mask = masks.sum(dim=-1)[0].item()
