@@ -86,8 +86,8 @@ def rejoin_tokens(tokens):
 #     return tokens, []
 
 token2marker = {'same': '*', 'opposite': '*', 'former': '#', 'latter': '#'}
-# nli_label2index = {'e': 0, 'n': 1, 'c': 2, 'h': -1,} # roberta-large-anli
-nli_label2index = {'c': 0, 'n': 1, 'e': 2, 'h': -1,}  # roberta-large-mnli
+nli_label2index = {'e': 0, 'n': 1, 'c': 2, 'h': -1,} # roberta-large-anli
+# nli_label2index = {'c': 0, 'n': 1, 'e': 2, 'h': -1,}  # roberta-large-mnli
 
 def get_matched_marker(token, is_marker=False): #, markers):
     token = token.replace('Ġ', '')
@@ -389,6 +389,34 @@ def normalize_tokens(tokens):
 def normalize(a): return a / a.norm()
 
 
+def _make_sentences():
+    def form_sentences(sentence_template, As, Bs, conj):
+        for A, B in product(As, Bs):
+            A, B = compare_and_tag_comparative(A, B) \
+                if tag_lexical_rel else (strip_rel_id(A), strip_rel_id(B))
+            if A is None: continue
+            if tag_entity_rel: A, B = compare_and_tag_entity(A, B)
+            if A is None: continue
+            sent = sentence_template.format(A=A, B=B, conj=conj)
+            sent = " " + " ".join(sent.split())
+            sentences.append(sent)
+
+            for rel_type in {'entity', 'lexical'}:
+                if not locals()['tag_' + rel_type + '_rel']: continue
+                the_other_rel_type = ({'entity', 'lexical'} - {rel_type}).pop()
+                excluded_tokens = comparatives if rel_type == 'entity' else entities
+                # wrong, because it will change the default value of entities!
+                # excluded_tokens += ['is', 'not', 'less', 'more', 'than', 'so'] + list(markers.values())
+                excluded_tokens = excluded_tokens + ['is', 'not', 'less', 'more', 'than', 'so'] + list(markers.values())
+                core = sent.split('?')[0]
+                for span in ['( [ %s ] )' % r for r in relation_labels[the_other_rel_type]]:
+                    core = core.replace(span, '')
+                core = [token for token in core.split() if token not in excluded_tokens]
+                core = " " + " ".join(core)
+                core = core.replace('(', '?').replace(')', '.')
+                cores.append(core)
+        return sentences, cores
+
 import string
 P_template = '{ent0} {rel} {ent1}'
 transitive_template = '{p0} and {p1} , so {Q} ? {conj} .'
@@ -397,6 +425,7 @@ transitive_wh_QA_template = '{which} is {pred} ? {ent} .'
 def make_transitive(entities=["_X", "_Y", "_Z"], entity_set=string.ascii_uppercase,
                     relation_group=[["big", ], ["small", ]], n_entity_trials=3,
                     has_negP=True, has_negQ=True, has_neutral=False, mask_types=['sent_rel']):
+    def get_comparative(word): return comparative(word)
     def form_atoms(relations, entities, has_neg=True):
         atoms = [P_template.format(ent0=ent0, ent1=ent1, rel=rel) for ent0, ent1, rel in
                  [entities + relations[:1], reverse(entities) + reverse(relations)[:1]]]
