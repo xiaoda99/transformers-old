@@ -13,10 +13,10 @@ def reverse(l): return list(reversed(l))
 def mask(ent_str):
     tokens = ent_str.strip().split()
     if len(tokens) == 1:
-        return '[ %s ]' % tokens[0]
+        return '< %s >' % tokens[0]
     elif len(tokens) == 2:
         assert tokens[0] == 'the', ent_str
-        return '%s [ %s ]' % (tokens[0], tokens[1])
+        return '%s < %s >' % (tokens[0], tokens[1])
     else:
         assert False, ent_str
 
@@ -66,24 +66,16 @@ def rejoin_tokens(tokens):
     out = []
     while len(tokens) > 0:
         token = tokens.pop(0)
-        if token in ['[', 'Ġ['] or token in ['(', 'Ġ('] and tokens[0] not in ['[', 'Ġ[']:
+        if token in ['<', 'Ġ<'] or token in ['(', 'Ġ('] and tokens[0] not in ['<', 'Ġ<']:
             next_token = tokens.pop(0)  # the maksed word
-            next_next_token = tokens.pop(0)  # "]" symbol
-            assert next_next_token in [']',  'Ġ]', ')',  'Ġ)']
+            next_next_token = tokens.pop(0)  # ">" symbol
+            assert next_next_token in ['>',  'Ġ>', ')',  'Ġ)']
             token, next_next_token = token.replace('Ġ', ''), next_next_token.replace('Ġ', '')
             out.append(token + next_token + next_next_token)
         else:
             out.append(token)
     return out
 
-# def process_markers(tokens, marker='*'):
-#     markers = [marker, 'Ġ' + marker]
-#     if any(token in markers for token in tokens):
-#         marked_positions = [i for i, token in enumerate(tokens) if token in markers]
-#         tokens = [token for token in tokens if token not in markers]
-#         marked_positions = [p - i for i, p in enumerate(marked_positions)]
-#         return tokens, marked_positions
-#     return tokens, []
 
 token2marker = {'same': '*', 'opposite': '*', 'former': '#', 'latter': '#'}
 nli_label2index = {'e': 0, 'n': 1, 'c': 2, 'h': -1,} # roberta-large-anli
@@ -115,7 +107,7 @@ def process_mask(tokens, tokenizer): #, markers, marked_positions):
     masked_tokens = []  # marked_pos_labels = []
     tokens = tokens.copy()
     for i, token in enumerate(tokens):
-        if token.startswith("[") and token.endswith("]") and token not in tokenizer.all_special_tokens:  # masked word
+        if token.startswith("<") and token.endswith(">") and token not in tokenizer.all_special_tokens:  # masked word
             token = token[1:-1]
             tokens[i] = tokenizer.mask_token
             output_label.append(tokenizer._convert_token_to_id(token))
@@ -154,6 +146,7 @@ def process_tag(tokens, tokenizer): #, markers, marked_positions):
 def convert_example_to_features(example, max_seq_length, tokenizer, max_noise_len=0,
                                 has_tags=False):
     cls_token, sep_token = tokenizer.cls_token, tokenizer.sep_token
+    is_roberta = sep_token == '</s>'
     tokens_a = example.tokens_a
     tokens_b = example.tokens_b
 
@@ -173,6 +166,7 @@ def convert_example_to_features(example, max_seq_length, tokenizer, max_noise_le
     # XD
     pos_ids = []
     cur_pos_id = randint(0, max_noise_len) if max_noise_len > 0 else 0
+    if is_roberta: cur_pos_id += 2
     pos_ids.append(cur_pos_id)
     cur_pos_id += 1
 
@@ -199,13 +193,14 @@ def convert_example_to_features(example, max_seq_length, tokenizer, max_noise_le
 
     if tokens_b is not None and len(tokens_b) > 0:
         segB_id = 1
-        if sep_token == '</s>':  # RoBERTa
+        if is_roberta:
             tokens.append(sep_token)
             segment_ids.append(0)
             pos_ids.append(cur_pos_id)
             cur_pos_id += 1
             lm_label_ids += [-1]
             segB_id = 0
+            max_seq_length = max_seq_length + 1
         if max_noise_len > 0:
             cur_pos_id += randint(0, max_noise_len)
 
@@ -254,9 +249,6 @@ def convert_example_to_features(example, max_seq_length, tokenizer, max_noise_le
     assert len(lm_label_ids) == max_seq_length, '%d != %d' % (len(lm_label_ids), max_seq_length)
     # XD
     assert len(pos_ids) == max_seq_length
-    # if markers is not None:
-    #     n_masks, n_labels, n_labels2 = input_ids.count(tokenizer.mask_token_id), sum(i != -1 for i in lm_label_ids), len(marked_pos_labels)
-    #     assert n_masks == n_labels + n_labels2, '%d != %d + %d' % (n_masks, n_labels, n_labels2)
     lm_label_ids = [-100 if i == -1 else i for i in lm_label_ids]
     if has_tags:
         assert len(tag_ids) == max_seq_length, '%d != %d' % (len(tag_ids), max_seq_length)
@@ -324,7 +316,6 @@ class CHILDDataset(Dataset):
             max_seq_len = max([len(example.tokens_a) + len(example.tokens_b) + 3
                 if example.tokens_b is not None else len(example.tokens_a) + 2
                 for example in examples])
-        if tokenizer.sep_token == '</s>': max_seq_len += 1  # RoBERTa
 
         self.features = []
         for _ in range(n_replicas):
@@ -417,6 +408,13 @@ def _make_sentences():
                 cores.append(core)
         return sentences, cores
 
+    # ...
+    substituted_sent_groups = substitute(sentences, n_entity_trials=n_entity_trials)
+    cores = list(set(join_lists(cores[k] for k in keys)))
+    cores = balance(cores, relation_labels)
+    substituted_core_groups = substitute(cores, n_entity_trials=1)
+    return sentences, substituted_sent_groups, cores, substituted_core_groups
+
 import string
 P_template = '{ent0} {rel} {ent1}'
 transitive_template = '{p0} and {p1} , so {Q} ? {conj} .'
@@ -501,3 +499,25 @@ def summarize_attributions(attributions):
     attributions = attributions.sum(dim=-1).squeeze(0)
     attributions = attributions / torch.norm(attributions)
     return attributions
+
+# inputs = train_dataset[0].__dict__
+# inputs = tokenizer.encode_plus(text, return_token_type_ids=True, return_tensors="pt")
+def predict_mask(inputs, model, tokenizer):
+    _ = model.eval()
+    if type(inputs['input_ids']) == list:
+        inputs = {k: torch.LongTensor(v).unsqueeze(0).to(model.device) for k, v in inputs.items()}
+    label = tokenizer._convert_id_to_token(inputs['labels'][inputs['labels'] != -100].item())
+    print(tokenizer.decode(inputs['input_ids'][0]), label, end=' ')
+#     print(tokenizer.convert_ids_to_tokens(inputs['input_ids'][0]))
+    inputs = {k: v for k, v in inputs.items() if k not in ['labels', ]}
+
+    logits = model(**inputs)[int('labels' in inputs)]
+    probs = logits.softmax(dim=-1)
+
+    mask_idx = (inputs['input_ids'][0] == tokenizer.mask_token_id).nonzero().item()
+    top_probs, top_indices = probs[0, mask_idx].topk(3)
+    top_tokens = tokenizer.convert_ids_to_tokens(top_indices)
+    top_probs = top_probs.detach().cpu().numpy().round(5)
+    print(list(zip(top_tokens, top_probs)))
+    # print()
+    return top_tokens, top_probs
