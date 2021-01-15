@@ -116,6 +116,7 @@ default_cache_path = os.path.join(torch_cache_home, "transformers")
 PYTORCH_PRETRAINED_BERT_CACHE = os.getenv("PYTORCH_PRETRAINED_BERT_CACHE", default_cache_path)
 PYTORCH_TRANSFORMERS_CACHE = os.getenv("PYTORCH_TRANSFORMERS_CACHE", PYTORCH_PRETRAINED_BERT_CACHE)
 TRANSFORMERS_CACHE = os.getenv("TRANSFORMERS_CACHE", PYTORCH_TRANSFORMERS_CACHE)
+print('TRANSFORMERS_CACHE =', TRANSFORMERS_CACHE)  # XD debug
 
 WEIGHTS_NAME = "pytorch_model.bin"
 TF2_WEIGHTS_NAME = "tf_model.h5"
@@ -665,6 +666,7 @@ def cached_path(
     if isinstance(cache_dir, Path):
         cache_dir = str(cache_dir)
 
+    print('In cached_path: url_or_filename =', url_or_filename)  # XD debug
     if is_remote_url(url_or_filename):
         # URL, so get it from the cache (downloading if necessary)
         output_path = get_from_cache(
@@ -676,6 +678,7 @@ def cached_path(
             user_agent=user_agent,
             local_files_only=local_files_only,
         )
+        print('In cached_path: output_path =', output_path)  # XD
     elif os.path.exists(url_or_filename):
         # File, and it exists.
         output_path = url_or_filename

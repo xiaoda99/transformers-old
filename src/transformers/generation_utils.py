@@ -544,6 +544,10 @@ class GenerationMixin:
                 batch_size=batch_size,
                 num_beams=1,
             )
+            if cur_len == 2:  # XD 0:<PAD>, 1:'<extra_id_0>'
+                promoted_token_ids = [2163, 465]  # '__Yes' and '__No' in T5Tokenizer
+                for token_id in promoted_token_ids:
+                    scores[:, token_id] += 2.
 
             # if model has past, then set the past variable to speed up decoding
             if self._use_cache(outputs, use_cache):

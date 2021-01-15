@@ -341,8 +341,61 @@ class CHILDDataset(Dataset):
     def __getitem__(self, i):
         return self.features[i]
 
+def convert_to_t5(sent, tokenizer, labels=['Yes', 'No', 'Maybe']):
+    masks = tokenizer.additional_special_tokens
+    sent = sent.replace('_', '')
+    label = None
+    for l in labels:
+        if l in sent:
+            label = l
+            sent = sent.replace('< %s >,' % label, masks[0])
+            break
+    assert label is not None, sent
+    sent = sent + ' </s>'
+    label = '%s %s, %s </s>' % (masks[0], label, masks[1])
+    return sent, label
 
-import matplotlib.pyplot as plt
+class T5Dataset(Dataset):
+    def __init__(self, lines, tokenizer):
+        if isinstance(lines, str):  # pathname
+            lines = open(lines).readlines()
+        examples = [convert_to_t5(line, tokenizer) for line in lines]
+        input_seqs, label_seqs = zip(*examples)
+        self.inputs = tokenizer.batch_encode_plus(input_seqs, add_special_tokens=False, padding=True)
+        self.labels = tokenizer.batch_encode_plus(label_seqs, add_special_tokens=False, padding=True)
+
+    def __len__(self):
+        return len(self.inputs['input_ids'])
+
+    def __getitem__(self, i):
+        return {'input_ids': self.inputs['input_ids'][i],
+                'attention_mask': self.inputs['attention_mask'][i],
+                'labels': self.labels['input_ids'][i]}
+
+def prepare_inputs(inputs, device):
+    for k, v in inputs.items():
+        if isinstance(v, torch.Tensor):
+            inputs[k] = v.to(device)
+    return inputs
+
+def strip_special_tokens(tokenizer, text):
+    special_tokens = tokenizer.additional_special_tokens
+    return text.split(special_tokens[0])[1].split(special_tokens[1])[0].strip()
+
+def decode_strip_special_tokens(tokenizer, token_ids):
+    text = tokenizer.decode(token_ids)
+    special_tokens = tokenizer.additional_special_tokens
+    assert special_tokens[0] in text, text
+    # assert special_tokens[1] in text, text
+    if special_tokens[1] not in text: print('no', special_tokens[1], text)
+    return text.split(special_tokens[0])[1].split(special_tokens[1])[0].strip()
+
+def decode_old(tokenizer, token_ids, skip_special_tokens=False, clean_up_tokenization_spaces=True):
+    filtered_tokens = tokenizer.convert_ids_to_tokens(token_ids, skip_special_tokens=skip_special_tokens)
+    text = tokenizer.sp_model.decode_pieces(filtered_tokens)
+    return tokenizer.clean_up_tokenization(text) if clean_up_tokenization_spaces else text
+
+# import matplotlib.pyplot as plt
 
 def plot_head_attn(attn, tokens, ax1=None, marked_positions=[]):
     assert attn.size(0) == attn.size(1) == len(tokens)
