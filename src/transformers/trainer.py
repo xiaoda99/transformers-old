@@ -22,7 +22,7 @@ from .data.data_collator import DataCollator, default_data_collator
 from .file_utils import is_torch_tpu_available
 from .integrations import is_comet_available, is_tensorboard_available, is_wandb_available
 from .modeling_utils import PreTrainedModel
-from .optimization import AdamW, get_linear_schedule_with_warmup
+from .optimization import AdamW, get_linear_schedule_with_warmup, get_constant_schedule  # XD
 from .trainer_utils import PREFIX_CHECKPOINT_DIR, EvalPrediction, PredictionOutput, TrainOutput, set_seed
 from .training_args import TrainingArguments
 # XD
@@ -181,7 +181,7 @@ class Trainer:
         optimizers: Tuple[torch.optim.Optimizer, torch.optim.lr_scheduler.LambdaLR] = (None, None),
         **kwargs,
     ):
-        self.model = model.to(args.device)
+        self.model = model.to(args.device) if model.device != args.device else model  # XD
         self.args = args
         self.data_collator = data_collator if data_collator is not None else default_data_collator
         self.train_dataset = train_dataset
@@ -217,7 +217,7 @@ class Trainer:
                 "To use comet_ml logging, run `pip/conda install comet_ml` "
                 "see https://www.comet.ml/docs/python-sdk/huggingface/"
             )
-        set_seed(self.args.seed)
+        # set_seed(self.args.seed)  # XD debvg
         # Create output directory if needed
         if self.is_world_process_zero():
             os.makedirs(self.args.output_dir, exist_ok=True)
@@ -247,6 +247,7 @@ class Trainer:
         else:
             return (
                 RandomSampler(self.train_dataset)
+                # SequentialSampler(self.train_dataset)
                 if self.args.local_rank == -1
                 else DistributedSampler(self.train_dataset)
             )
@@ -280,7 +281,8 @@ class Trainer:
         elif self.args.local_rank != -1:
             return SequentialDistributedSampler(eval_dataset)
         else:
-            return RandomSampler(eval_dataset)  # XD SequentialSampler(eval_dataset)
+            return SequentialSampler(eval_dataset)
+            # return RandomSampler(eval_dataset)  # XD
 
     def get_eval_dataloader(self, eval_dataset: Optional[Dataset] = None) -> DataLoader:
         """
@@ -359,9 +361,10 @@ class Trainer:
                 eps=self.args.adam_epsilon,
             )
         if self.lr_scheduler is None:
-            self.lr_scheduler = get_linear_schedule_with_warmup(
-                self.optimizer, num_warmup_steps=self.args.warmup_steps, num_training_steps=num_training_steps
-            )
+            self.lr_scheduler = get_constant_schedule(self.optimizer)  # XD
+            # self.lr_scheduler = get_linear_schedule_with_warmup(
+            #     self.optimizer, num_warmup_steps=self.args.warmup_steps, num_training_steps=num_training_steps
+            # )
 
     def setup_wandb(self):
         """
@@ -538,7 +541,7 @@ class Trainer:
         train_iterator = trange(
             epochs_trained, int(num_train_epochs), desc="Epoch", disable=not self.is_local_process_zero()
         )
-        self.evaluate()  # XD
+        # self.evaluate()  # XD
         for epoch in train_iterator:
             if isinstance(train_dataloader, DataLoader) and isinstance(train_dataloader.sampler, DistributedSampler):
                 train_dataloader.sampler.set_epoch(epoch)
@@ -941,6 +944,13 @@ class Trainer:
             # tpu-comment: Logging debug metrics for PyTorch/XLA (compile, execute times, ops, etc.)
             xm.master_print(met.metrics_report())
 
+        if eval_dataset is None and getattr(self, 'eval_datasets', None):  # XD
+            for suffix in ['neg0', 'neg1', 'neg2']:
+                # _ = self.evaluate(self.eval_datasets[suffix])
+                eval_dataloader2 = self.get_eval_dataloader(self.eval_datasets[suffix])
+                output2 = self.prediction_loop(eval_dataloader2, description="Diagnostic Evaluation")
+                print(suffix, end=' ')
+                self.log(output2.metrics)
         return output.metrics
 
     def predict(self, test_dataset: Dataset) -> PredictionOutput:
@@ -1031,6 +1041,12 @@ class Trainer:
                 pred_labels = logits.argmax(dim=-1)
                 labels = labels.masked_select(masks).view(bsz, n_mask)
                 for mask_id in range(n_mask):
+                    if description == "Diagnostic Evaluation":
+                        for input_ids, label, pred_label, prob in zip(inputs['input_ids'], labels[:, mask_id],
+                                                                    pred_labels[:, mask_id], probs[:, mask_id]):
+                            if pred_label != label:
+                                print(self.tokenizer.decode(input_ids), self.tokenizer._convert_id_to_token(label.item()),
+                                    self.tokenizer._convert_id_to_token(pred_label.item()), round(prob[pred_label.item()].item(), 3))
                     acc = (pred_labels == labels)[:, mask_id].float().mean().item()
                     key = head_name + str(mask_id)
                     accuracies[key].append(acc)

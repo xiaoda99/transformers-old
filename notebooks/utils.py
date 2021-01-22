@@ -288,21 +288,26 @@ class CHILDDataset(Dataset):
     all_lines = {Split.train: None, Split.dev: None, Split.test: None}
 
     def __init__(self, all_lines, tokenizer, markers=None, has_tags=False, max_seq_len=None,
-            max_noise_len=0, n_replicas=1, split_pct=[0.7, 0.3, 0.0], mode=Split.train):
+            max_noise_len=0, n_replicas=1, split_pct=[0.7, 0.3, 0.0], shuffle=False, mode=Split.train):
         def sample(l, n): return l if len(l) <= n else random.sample(l, n)
 
         if isinstance(mode, str): mode = Split[mode]
-        # if CHILDDataset.all_lines[mode] is None:
-        #     # random.shuffle(all_lines)
-        #     n_dev = int(round(len(all_lines) * split_pct[1]))
-        #     n_test = int(round(len(all_lines) * split_pct[2]))
-        #     n_train = len(all_lines) - n_dev - n_test
+        if isinstance(all_lines, str):  # pathname
+            all_lines = [line.strip() for line in open(all_lines).readlines()]
+        else:
+            # if CHILDDataset.all_lines[mode] is None:
+            #     # random.shuffle(all_lines)
+            #     n_dev = int(round(len(all_lines) * split_pct[1]))
+            #     n_test = int(round(len(all_lines) * split_pct[2]))
+            #     n_train = len(all_lines) - n_dev - n_test
 
-        #     CHILDDataset.all_lines[Split.train] = flatten(all_lines[:n_train])
-        #     CHILDDataset.all_lines[Split.dev] = sample(flatten(all_lines[n_train: n_train + n_dev]), 10000)
-        #     CHILDDataset.all_lines[Split.test] = sample(flatten(all_lines[n_train + n_dev:]), 10000)
-        # all_lines = CHILDDataset.all_lines[mode]
-        all_lines = flatten(all_lines)
+            #     CHILDDataset.all_lines[Split.train] = flatten(all_lines[:n_train])
+            #     CHILDDataset.all_lines[Split.dev] = sample(flatten(all_lines[n_train: n_train + n_dev]), 10000)
+            #     CHILDDataset.all_lines[Split.test] = sample(flatten(all_lines[n_train + n_dev:]), 10000)
+            # all_lines = CHILDDataset.all_lines[mode]
+            all_lines = flatten(all_lines)
+        if shuffle: random.shuffle(all_lines)
+
         if mode in [Split.dev, Split.test]: all_lines = sample(all_lines, 10000)
         examples = []
         for i, line in enumerate(all_lines):
@@ -343,7 +348,6 @@ class CHILDDataset(Dataset):
 
 def convert_to_t5(sent, tokenizer, labels=['Yes', 'No', 'Maybe']):
     masks = tokenizer.additional_special_tokens
-    sent = sent.replace('_', '')
     label = None
     for l in labels:
         if l in sent:
@@ -356,9 +360,13 @@ def convert_to_t5(sent, tokenizer, labels=['Yes', 'No', 'Maybe']):
     return sent, label
 
 class T5Dataset(Dataset):
-    def __init__(self, lines, tokenizer):
+    def __init__(self, lines, tokenizer, sample=None):
         if isinstance(lines, str):  # pathname
             lines = open(lines).readlines()
+        lines = [line.strip() for line in lines]
+        if sample is not None:
+            if sample < 1: sample = int(round(len(lines) * sample))
+            lines = random.sample(lines, sample)
         examples = [convert_to_t5(line, tokenizer) for line in lines]
         input_seqs, label_seqs = zip(*examples)
         self.inputs = tokenizer.batch_encode_plus(input_seqs, add_special_tokens=False, padding=True)
@@ -394,6 +402,29 @@ def decode_old(tokenizer, token_ids, skip_special_tokens=False, clean_up_tokeniz
     filtered_tokens = tokenizer.convert_ids_to_tokens(token_ids, skip_special_tokens=skip_special_tokens)
     text = tokenizer.sp_model.decode_pieces(filtered_tokens)
     return tokenizer.clean_up_tokenization(text) if clean_up_tokenization_spaces else text
+
+def balanced_sample(lines, n_total):
+    n_neg0, n_neg1, n_neg2 = n_total // 2, n_total // 4, n_total // 4
+    assert n_neg0 + n_neg1 + n_neg2 == n_total, '%d + %d + %d != %d' % (n_neg0, n_neg1, n_neg2, n_total)
+    lines_neg0 = [line for line in lines if line.count(' not ') + line.count(' less ') == 0]
+    lines_neg1 = [line for line in lines if line.count(' not ') + line.count(' less ') == 1]
+    lines_neg2 = [line for line in lines if line.count(' not ') + line.count(' less ') == 2]
+    assert len(lines_neg0) > n_neg0
+    assert len(lines_neg1) > n_neg1
+    assert len(lines_neg2) > n_neg2
+    while True:
+        lines_neg0_sampled = random.sample(lines_neg0, n_neg0)
+#         print('neg0', sum(' Yes ' in line for line in lines_neg0), sum(' No ' in line for line in lines_neg0))
+        lines_neg1_sampled = random.sample(lines_neg1, n_neg1)
+#         print('neg1', sum(' Yes ' in line for line in lines_neg1), sum(' No ' in line for line in lines_neg1))
+        lines_neg2_sampled = random.sample(lines_neg2, n_neg2)
+#         print('neg2', sum(' Yes ' in line for line in lines_neg2), sum(' No ' in line for line in lines_neg2))
+        out_lines = lines_neg0_sampled + lines_neg1_sampled + lines_neg2_sampled
+        n_entail = sum(' Yes ' in line for line in out_lines)
+        n_contradict = sum(' No ' in line for line in out_lines)
+#         print('In balanced_sample:', n_entail, n_contradict)
+        if n_entail == n_contradict: break
+    return out_lines
 
 # import matplotlib.pyplot as plt
 
