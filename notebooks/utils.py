@@ -328,7 +328,6 @@ def convert_example_to_features(example, max_seq_length, tokenizer, max_noise_le
     if marked_pos_labels is not None:
         # features.head_mask = marked_positions
         features.marked_pos_labels = marked_pos_labels
-        print(tokens[marked_pos_labels[1][1]])
     if example.guid <= -1:
         print('in convert_example_to_features: features.labels =', features.labels)
     return features
