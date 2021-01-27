@@ -779,7 +779,9 @@ class PreTrainedModel(nn.Module, ModuleUtilsMixin, GenerationMixin):
                 resolved_archive_file = None
 
             # Instantiate model.
+            # print('In from_pretrained: initializing model...')  # XD debug
             model = cls(config, *model_args, **model_kwargs)
+            # print('In from_pretrained: initializing model done')  # XD debug
 
         if state_dict is None and pretrained_model_name_or_path in cls.state_dicts:    # XD
             state_dict = cls.state_dicts[pretrained_model_name_or_path]
@@ -795,6 +797,7 @@ class PreTrainedModel(nn.Module, ModuleUtilsMixin, GenerationMixin):
                     "If you tried to load a PyTorch model from a TF 2.0 checkpoint, please set from_tf=True. "
                 )
 
+        # print('In from_pretrained: loading from state_dict...')  # XD debug
         missing_keys = []
         unexpected_keys = []
         error_msgs = []
@@ -901,6 +904,7 @@ class PreTrainedModel(nn.Module, ModuleUtilsMixin, GenerationMixin):
                         model.__class__.__name__, "\n\t".join(error_msgs)
                     )
                 )
+        # print('In from_pretrained: loading from state_dict done')  # XD debug
         model.tie_weights()  # make sure token embedding weights are still tied if needed
 
         # Set model in evaluation mode to deactivate DropOut modules by default

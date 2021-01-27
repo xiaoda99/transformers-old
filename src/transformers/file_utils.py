@@ -666,7 +666,7 @@ def cached_path(
     if isinstance(cache_dir, Path):
         cache_dir = str(cache_dir)
 
-    print('In cached_path: url_or_filename =', url_or_filename)  # XD debug
+    # print('In cached_path: url_or_filename =', url_or_filename)  # XD debug
     if is_remote_url(url_or_filename):
         # URL, so get it from the cache (downloading if necessary)
         output_path = get_from_cache(
@@ -678,7 +678,7 @@ def cached_path(
             user_agent=user_agent,
             local_files_only=local_files_only,
         )
-        print('In cached_path: output_path =', output_path)  # XD
+        # print('In cached_path: output_path =', output_path)  # XD
     elif os.path.exists(url_or_filename):
         # File, and it exists.
         output_path = url_or_filename

@@ -45,6 +45,78 @@ def balance(cores, relation_labels):
         cores_by_type['unrelated'] = random.sample(cores_by_type['unrelated'], len(cores_by_type['opposite']))
     return join_lists(cores_by_type.values())
 
+def balanced_sample(lines, n_total, has_neg=True):
+    if not has_neg:
+        while True:
+            out_lines = random.sample(lines, n_total)
+            n_entail = sum(' Yes ' in line for line in out_lines)
+            n_contradict = sum(' No ' in line for line in out_lines)
+            if n_entail == n_contradict: return out_lines
+
+    n_neg0, n_neg1, n_neg2 = n_total // 2, n_total // 4, n_total // 4
+    assert n_neg0 + n_neg1 + n_neg2 == n_total, '%d + %d + %d != %d' % (n_neg0, n_neg1, n_neg2, n_total)
+    lines_neg0 = [line for line in lines if line.count(' not ') + line.count(' less ') == 0]
+    lines_neg1 = [line for line in lines if line.count(' not ') + line.count(' less ') == 1]
+    lines_neg2 = [line for line in lines if line.count(' not ') + line.count(' less ') == 2]
+    assert len(lines_neg0) > n_neg0
+    assert len(lines_neg1) > n_neg1
+    assert len(lines_neg2) > n_neg2
+    while True:
+        lines_neg0_sampled = random.sample(lines_neg0, n_neg0)
+        lines_neg1_sampled = random.sample(lines_neg1, n_neg1)
+        lines_neg2_sampled = random.sample(lines_neg2, n_neg2)
+        out_lines = lines_neg0_sampled + lines_neg1_sampled + lines_neg2_sampled
+        n_entail = sum(' Yes ' in line for line in out_lines)
+        n_contradict = sum(' No ' in line for line in out_lines)
+        if n_entail == n_contradict: break
+    return out_lines
+
+def dump_datasets(lines_tuple, frames_splits, sample_ratios, n_balanced_samples, has_neg=True, tagged=True):
+    has_neg_str = '' if has_neg else 'neg0_'
+    tagged_str = '_tagged' if tagged else ''
+    subset_idx = 0  # train
+    if n_balanced_samples[subset_idx] is not None:
+        train_pathname = '../data/train_%s%drgx%d_balanced_sample%d%s.txt' % (has_neg_str,
+            len(frames_splits[subset_idx]), sample_ratios[subset_idx], n_balanced_samples[subset_idx], tagged_str)
+        lines = balanced_sample(lines_tuple[subset_idx], n_balanced_samples[subset_idx], has_neg=has_neg)
+    else:
+        train_pathname = '../data/train_%s%drgx%d%s.txt' % (has_neg_str,
+            len(frames_splits[subset_idx]), sample_ratios[subset_idx], tagged_str)
+        lines = lines_tuple[subset_idx]
+
+    print(train_pathname)
+    with open(train_pathname, 'w') as f:
+        for line in lines:
+            _ = f.write(line + '\n')
+
+    subset_idx = 1  # eval
+    if lines[subset_idx] is None: return
+    eval_pathname = '../data/eval_%s%drgx%d%s.txt' % (has_neg_str,
+        len(frames_splits[subset_idx]), sample_ratios[subset_idx], tagged_str)
+    print(eval_pathname)
+    assert n_balanced_samples[subset_idx] is None
+    lines = lines_tuple[subset_idx]
+    with open(eval_pathname, 'w') as f:
+        for line in lines:
+            _ = f.write(line + '\n')
+
+    if has_neg:
+        lines_neg = {}
+        for neg_cnt in [0, 1, 2]:
+            lines_neg[neg_cnt] = [line for line in lines if line.count(' not ') + line.count(' less ') == neg_cnt]
+            diag_eval_pathname = eval_pathname + '.neg' + str(neg_cnt)
+            with open(diag_eval_pathname, 'w') as f:
+                for line in lines_neg[neg_cnt]:
+                    _ = f.write(line + '\n')
+    return train_pathname, eval_pathname
+
+def strip_tags(line):
+    for marker in markers.values():
+        line = line.replace(marker + ' ', '')
+    for tag in _tag2id:
+        line = line.replace(' ( %s )' % tag, '')
+    return line
+
 class InputExample(object):
     def __init__(self, guid, tokens_a, tokens_b=None, label=None, lm_labels=None):
         self.guid = guid
@@ -69,7 +141,10 @@ def rejoin_tokens(tokens):
         if token in ['<', 'Ġ<'] or token in ['(', 'Ġ('] and tokens[0] not in ['<', 'Ġ<']:
             next_token = tokens.pop(0)  # the maksed word
             next_next_token = tokens.pop(0)  # ">" symbol
-            assert next_next_token in ['>',  'Ġ>', ')',  'Ġ)']
+            if next_next_token in ['Ġ),', 'Ġ).']:
+                tokens.insert(0, next_next_token[-1])
+                next_next_token = next_next_token[:-1]
+            assert next_next_token in ['>',  'Ġ>', ')',  'Ġ)'], str([token, next_token, next_next_token])
             token, next_next_token = token.replace('Ġ', ''), next_next_token.replace('Ġ', '')
             out.append(token + next_token + next_next_token)
         else:
@@ -112,14 +187,6 @@ def process_mask(tokens, tokenizer): #, markers, marked_positions):
             tokens[i] = tokenizer.mask_token
             output_label.append(tokenizer._convert_token_to_id(token))
             masked_tokens.append(token)
-            # marker = get_matched_marker(token, markers.values()) if markers is not None else None
-            # if marker is not None:
-            #     output_label.append(-1 if token.endswith(marker) else tokenizer._convert_token_to_id(token))
-            #     positions = marked_positions[marker]
-            #     assert len(positions) in [2], marker + ' ' + str(len(positions))
-            #     marked_pos_labels.append(positions)
-            # else:
-            #     output_label.append(tokenizer._convert_token_to_id(token))
         else:
             output_label.append(-1)
     return tokens, output_label, masked_tokens  # marked_pos_labels
@@ -132,10 +199,6 @@ def process_tag(tokens, tokenizer): #, markers, marked_positions):
             token = token[1:-1]
             output_label[-1] = tokenizer.tag2id[token]
             tagged_tokens.append(token)
-            # marker = get_matched_marker(token, markers.values())
-            # positions = marked_positions[marker]
-            # assert len(positions) in [2], marker + ' ' + str(len(positions))
-            # marked_pos_labels.append(positions)
         else:
             output_tokens.append(token)
             output_label.append(-1)
@@ -321,6 +384,7 @@ class CHILDDataset(Dataset):
             max_seq_len = max([len(example.tokens_a) + len(example.tokens_b) + 3
                 if example.tokens_b is not None else len(example.tokens_a) + 2
                 for example in examples])
+        if has_tags: max_seq_len -= 6  # 4 markers + 2 tags
 
         self.features = []
         for _ in range(n_replicas):
@@ -403,29 +467,6 @@ def decode_old(tokenizer, token_ids, skip_special_tokens=False, clean_up_tokeniz
     text = tokenizer.sp_model.decode_pieces(filtered_tokens)
     return tokenizer.clean_up_tokenization(text) if clean_up_tokenization_spaces else text
 
-def balanced_sample(lines, n_total):
-    n_neg0, n_neg1, n_neg2 = n_total // 2, n_total // 4, n_total // 4
-    assert n_neg0 + n_neg1 + n_neg2 == n_total, '%d + %d + %d != %d' % (n_neg0, n_neg1, n_neg2, n_total)
-    lines_neg0 = [line for line in lines if line.count(' not ') + line.count(' less ') == 0]
-    lines_neg1 = [line for line in lines if line.count(' not ') + line.count(' less ') == 1]
-    lines_neg2 = [line for line in lines if line.count(' not ') + line.count(' less ') == 2]
-    assert len(lines_neg0) > n_neg0
-    assert len(lines_neg1) > n_neg1
-    assert len(lines_neg2) > n_neg2
-    while True:
-        lines_neg0_sampled = random.sample(lines_neg0, n_neg0)
-#         print('neg0', sum(' Yes ' in line for line in lines_neg0), sum(' No ' in line for line in lines_neg0))
-        lines_neg1_sampled = random.sample(lines_neg1, n_neg1)
-#         print('neg1', sum(' Yes ' in line for line in lines_neg1), sum(' No ' in line for line in lines_neg1))
-        lines_neg2_sampled = random.sample(lines_neg2, n_neg2)
-#         print('neg2', sum(' Yes ' in line for line in lines_neg2), sum(' No ' in line for line in lines_neg2))
-        out_lines = lines_neg0_sampled + lines_neg1_sampled + lines_neg2_sampled
-        n_entail = sum(' Yes ' in line for line in out_lines)
-        n_contradict = sum(' No ' in line for line in out_lines)
-#         print('In balanced_sample:', n_entail, n_contradict)
-        if n_entail == n_contradict: break
-    return out_lines
-
 # import matplotlib.pyplot as plt
 
 def plot_head_attn(attn, tokens, ax1=None, marked_positions=[]):
@@ -457,7 +498,7 @@ def plot_head_attn(attn, tokens, ax1=None, marked_positions=[]):
     plt.show()
 
 def normalize_tokens(tokens):
-    return ['@' + token if not token.startswith('Ġ') and token not in ['<s>', '</s>', '<mask>']
+    return ['@' + token if not token.startswith('Ġ') and token not in ['<s>', '</s>', '<mask>', ',', '.', '?']
             else token.replace('Ġ', '').replace('<mask>', '_')
             for token in tokens]
 
@@ -605,3 +646,64 @@ def predict_mask(inputs, model, tokenizer):
     print(list(zip(top_tokens, top_probs)))
     # print()
     return top_tokens, top_probs
+
+'''
+from types import MethodType
+tokenizer.strip_special_tokens = MethodType(strip_special_tokens, tokenizer)
+tokenizer.decode_strip_special_tokens = MethodType(decode_strip_special_tokens, tokenizer)
+tokenizer.decode_old = MethodType(decode_old, tokenizer)
+
+_ = model.eval()
+interpretable_embedding = configure_interpretable_embedding_layer(model, 'roberta.embeddings')
+
+inputs = trainer._prepare_inputs(inputs, model)
+input_ids, attention_mask, token_type_ids, position_ids, labels = \
+    inputs['input_ids'], inputs['attention_mask'], inputs['token_type_ids'], inputs['position_ids'], inputs['labels']
+additional_fwd_args = (token_type_ids, position_ids, attention_mask)
+if 'marked_pos_labels' in inputs and inputs['marked_pos_labels'] is not None:
+    marked_pos_labels = inputs['marked_pos_labels']
+    marked_positions = marked_pos_labels[:, 0]  # (bsz, 1, 2) -> (bsz, 2)
+    cls_positions = (input_ids == model.tokenizer.cls_token_id).nonzero()[:, 1:]
+    sep_positions = (input_ids == model.tokenizer.sep_token_id).nonzero()[:, 1:]
+    be_positions = torch.ones_like(cls_positions) * 2
+    mask_positions = (input_ids == model.tokenizer.mask_token_id).nonzero()[:, 1:]
+    assert cls_positions.size(0) == sep_positions.size(0) == mask_positions.size(0) == marked_positions.size(0), \
+        '%d %d %d %d' % (cls_positions.size(0), sep_positions.size(0), mask_positions.size(0), marked_positions.size(0))
+#     probe_positions = mask_positions
+    probe_positions = torch.cat([cls_positions, sep_positions, be_positions, mask_positions], dim=-1)
+    additional_fwd_args = additional_fwd_args + (marked_pos_labels, probe_positions)
+additional_fwd_args = additional_fwd_args + (labels,)
+input_embeddings = interpretable_embedding.indices_to_embeddings(input_ids, token_type_ids=token_type_ids, position_ids=position_ids)
+all_tokens = normalize_tokens(tokenizer.convert_ids_to_tokens(input_ids[0]))
+
+# def mlm_fwd_fn(inputs, token_type_ids=None, position_ids=None, attention_mask=None, labels=None, mask_id=None):
+def mlm_fwd_fn(inputs, *args):
+    args, labels, mask_id = args[:-2], args[-2], args[-1]
+    is_probe_logits = True
+    logits = model(inputs, *args, detach=False)[int(is_probe_logits)]
+    if not is_probe_logits:
+        bsz, seq_len, vocab_size = logits.size()
+        logits = logits[labels != -100].view(bsz, -1, vocab_size)
+    return logits[:, mask_id].max(dim=-1).values
+
+mask_id = 0
+layer_attrs = []
+n_layers = 7 + mask_id or model.config.num_hidden_layers
+model.zero_grad()
+for i in range(n_layers):
+    lc = LayerIntegratedGradients(mlm_fwd_fn, model.roberta.encoder.layer[i])
+    attributions = lc.attribute(inputs=input_embeddings,
+                                additional_forward_args=additional_fwd_args + (mask_id,),
+                                n_steps=20)[0]
+    layer_attrs.append(summarize_attributions(attributions).cpu().detach().tolist())
+
+fig, ax = plt.subplots(figsize=(15,5))
+xticklabels=all_tokens
+yticklabels=list(range(n_layers))
+ax = sns.heatmap((np.array(layer_attrs) * 100).astype('int64'), xticklabels=xticklabels, yticklabels=yticklabels, annot=True, fmt='d', linewidth=0.2)
+# plt.xlabel('Tokens')
+# plt.ylabel('Layers')
+plt.show()
+
+remove_interpretable_embedding_layer(model, interpretable_embedding)
+'''

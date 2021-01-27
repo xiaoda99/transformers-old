@@ -719,13 +719,34 @@ class Trainer:
             iterator.write(output)
         else:
             if any('eval' in k for k in output.keys()) and hasattr(self.model, 'probe_layers'):  # XD
-                for i, layer in enumerate(self.model.probe_layers):
+                model = self.model
+                print({k: v for k, v in output.items() if k in ['eval_loss', 'epoch']})
+                print('L\\', end='  ')
+                # if self.model.probe_type.startswith('per_head'):
+                #     for i in range(self.model.n_probe_positions):
+                #         print('%5d' % i, end='  ')
+                # else:
+                #     for k in self.model.probe_position_keys:
+                #         print('%5s' % k, end='  ')
+                col_names = [str(i) for i in range(model.n_probe_positions)] \
+                    if model.probe_type.startswith('per_head') else model.probe_position_keys
+                for col_name in col_names:
+                    print('%5s' % col_name, end='  ')
+                print()
+                results = []
+                for i, layer in enumerate(model.probe_layers):
                     print('%2d' % layer, end='  ')
-                    for j in range(self.model.n_probe_positions):
-                        n = i * self.model.n_probe_positions + j
-                        print('%.2f/%.2f' % (output['eval_acc_tc' + str(n)],
-                            get_mean_pred_prob(output['eval_stat_tc' + str(n)])), end='  ')
+                    for j in range(model.n_probe_positions):
+                        n = i * model.n_probe_positions + j
+                        acc = output['eval_acc_tc' + str(n)]
+                        prob = get_mean_pred_prob(output['eval_stat_tc' + str(n)])
+                        print('%2d/%2d' % (acc * 100, prob * 100), end='  ')
+                        results.append([layer, col_names[j], acc, prob])
                     print()
+                sorted_results = sorted(results, key=lambda x: x[-1], reverse=True)
+                # for i, (layer, col_name, acc, prob) in enumerate(sorted_results):
+                #     if prob > 0.9 or i < 5:
+                #         print('%d-%s: %d/%d' % (layer, col_name, acc * 100, prob * 100))
             else:
                 print(output)
 
@@ -944,13 +965,13 @@ class Trainer:
             # tpu-comment: Logging debug metrics for PyTorch/XLA (compile, execute times, ops, etc.)
             xm.master_print(met.metrics_report())
 
-        if eval_dataset is None and getattr(self, 'eval_datasets', None):  # XD
-            for suffix in ['neg0', 'neg1', 'neg2']:
-                # _ = self.evaluate(self.eval_datasets[suffix])
-                eval_dataloader2 = self.get_eval_dataloader(self.eval_datasets[suffix])
-                output2 = self.prediction_loop(eval_dataloader2, description="Diagnostic Evaluation")
-                print(suffix, end=' ')
-                self.log(output2.metrics)
+        # if eval_dataset is None and getattr(self, 'eval_datasets', None):  # XD
+        #     for suffix in ['neg0', 'neg1', 'neg2']:
+        #         # _ = self.evaluate(self.eval_datasets[suffix])
+        #         eval_dataloader2 = self.get_eval_dataloader(self.eval_datasets[suffix])
+        #         output2 = self.prediction_loop(eval_dataloader2, description="Diagnostic Evaluation")
+        #         print(suffix, end=' ')
+        #         self.log(output2.metrics)
         return output.metrics
 
     def predict(self, test_dataset: Dataset) -> PredictionOutput:
@@ -1183,6 +1204,10 @@ class Trainer:
                 elif type(model).__name__ in ['RobertaForProbing']:
                     bsz, n_probes, _ = tc_logits.size()
                     tc_labels = tc_labels[tc_labels != -100]
+                    tc_labels = tc_labels.view(bsz, -1)
+                    tc_labels = tc_labels[:, model.probe_tc_label_idx] \
+                        if model.probe_tc_label_idx is not None \
+                        else (tc_labels[:, 0] == tc_labels[:, 1]).long()
                     assert len(tc_labels) == bsz, str(len(tc_labels))
                     tc_labels = tc_labels.unsqueeze(-1).expand(-1, n_probes) # (bsz,) -> (bsz, L*4)
                 tc_labels = tc_labels.detach()

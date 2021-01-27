@@ -425,17 +425,22 @@ class RobertaForProbing(BertPreTrainedModel):  # XD
         self.lm_head = RobertaLMHead(config)
         # XD
         self.probes = nn.ModuleDict()
+        self.probe_tc_label_idx = 1
         self.num_probe_labels = 2
-        self.per_head_probe = True
-        self.probe_layers = list(range(6, 7))
-        self.n_probe_positions = self.config.num_attention_heads if self.per_head_probe else 6
+        self.probe_type = 'per_head'
+        self.per_head_probe_pos = 'be1'  # 'mask'
+        assert self.probe_type in ['accum', 'per_layer', 'per_head', 'per_head_src']
+        self.probe_layers = list(range(10, 24))
+        self.probe_position_keys = ['e0', 'e1', 'r0', 'r1', 'be0', 'be1', '?', ',', 'cls', 'sep', 'mask']
+        self.n_probe_positions = self.config.num_attention_heads \
+            if self.probe_type.startswith('per_head') else len(self.probe_position_keys)
         for i in self.probe_layers:
             for probe_i in range(self.n_probe_positions):
                 hidden_size = self.config.hidden_size
-                if self.per_head_probe: hidden_size = hidden_size // self.config.num_attention_heads
+                if self.probe_type.startswith('per_head'): hidden_size = hidden_size // self.config.num_attention_heads
                 self.probes[json.dumps((i, probe_i))] = Probe(hidden_size, self.num_probe_labels)
         self.roberta.encoder.probe_layers = self.probe_layers
-        self.roberta.encoder.per_head_probe = self.per_head_probe
+        self.roberta.encoder.probe_type = self.probe_type
         self.init_weights()
 
     def get_output_embeddings(self):
@@ -452,19 +457,27 @@ class RobertaForProbing(BertPreTrainedModel):  # XD
         return_dict = return_dict if return_dict is not None else self.config.use_return_dict
 
         # XD
-        assert marked_pos_labels.size(1) == 1 and marked_pos_labels.size(2) == 2, str(marked_pos_labels.size())
-        marked_positions = marked_pos_labels[:, 0]  # (bsz, 1, 2) -> (bsz, 2)
-        cls_positions = (input_ids == self.tokenizer.cls_token_id).nonzero()[:, 1:]
-        sep_positions = (input_ids == self.tokenizer.sep_token_id).nonzero()[:, 1:]
-        be_positions = torch.ones_like(cls_positions) * 2
-        so_positions = (input_ids == self.tokenizer._convert_token_to_id('Ġso')).nonzero()[:, 1:]
-        be2_positions = so_positions + 2
-        qmark_positions = (input_ids == self.tokenizer._convert_token_to_id('Ġ?')).nonzero()[:, 1:]
-        mask_positions = (input_ids == self.tokenizer.mask_token_id).nonzero()[:, 1:]
-        self.roberta.encoder.probe_positions = so_positions if self.per_head_probe else torch.cat(
-            [marked_positions, cls_positions, sep_positions, so_positions, mask_positions], dim=-1)
-        # assert probe_positions is not None
-        # self.roberta.encoder.probe_positions = probe_positions
+        positions = {}
+        assert marked_pos_labels.size(1) == 2 and marked_pos_labels.size(2) == 2, str(marked_pos_labels.size())
+        # positions['mark0'] = marked_pos_labels[:, self.probe_tc_label_idx, :1]  # (bsz, 2, 2) -> (bsz, 1)
+        # positions['mark1'] = marked_pos_labels[:, self.probe_tc_label_idx, 1:]  # (bsz, 2, 2) -> (bsz, 1)
+        positions['e0'] = marked_pos_labels[:, 0, :1]  # (bsz, 2, 2) -> (bsz, 1)
+        positions['e1'] = marked_pos_labels[:, 0, 1:]  # (bsz, 2, 2) -> (bsz, 1)
+        positions['r0'] = marked_pos_labels[:, 1, :1]  # (bsz, 2, 2) -> (bsz, 1)
+        positions['r1'] = marked_pos_labels[:, 1, 1:]  # (bsz, 2, 2) -> (bsz, 1)
+        positions['cls'] = (input_ids == self.tokenizer.cls_token_id).nonzero()[:, 1:]
+        positions['sep'] = (input_ids == self.tokenizer.sep_token_id).nonzero()[:, 1:]
+        # be_positions = torch.ones_like(cls_positions) * 2
+        be0_pos, be1_pos = (input_ids == self.tokenizer._convert_token_to_id('Ġis')).nonzero() \
+            .view(input_ids.size(0), 2, -1).chunk(2, dim=1)
+        positions['be0'], positions['be1'] = be0_pos[:, 0, 1:], be1_pos[:, 0, 1:]
+        positions['?'] = (input_ids == self.tokenizer._convert_token_to_id('?')).nonzero()[:, 1:]
+        positions[','] = (input_ids == self.tokenizer._convert_token_to_id(',')).nonzero()[:, 1:]
+        positions['mask'] = (input_ids == self.tokenizer.mask_token_id).nonzero()[:, 1:]
+        positions['mean'] = 'mean'
+        self.roberta.encoder.probe_positions = positions[self.per_head_probe_pos] \
+            if self.probe_type.startswith('per_head') \
+            else torch.cat([positions[k] for k in self.probe_position_keys], dim=-1)
 
         outputs = self.roberta(
             input_ids,
@@ -494,7 +507,7 @@ class RobertaForProbing(BertPreTrainedModel):  # XD
         probe_logits = []
         for key, probe in self.probes.items():
             layer_i, probe_i = json.loads(key)
-            # print('layer_i, probe_i =', layer_i, probe_i)
+            # print('layer_i, probe_i =', layer_i, probe_i, probed_hidden_states[layer_i].size())
             probe_logits.append(probe(probed_hidden_states[layer_i][:, probe_i]))
         probe_logits = torch.stack(probe_logits, dim=1) # L*4 (bsz, num_probe_labels) -> (bsz, L*4, num_probe_labels)
 
@@ -502,7 +515,10 @@ class RobertaForProbing(BertPreTrainedModel):  # XD
         if tc_labels is not None:
             loss_fct = CrossEntropyLoss()
             bsz, n_probes, _ = probe_logits.size()
-            tc_labels = tc_labels[tc_labels != loss_fct.ignore_index]
+            tc_labels = tc_labels[tc_labels != loss_fct.ignore_index].view(bsz, -1)
+            tc_labels = tc_labels[:, self.probe_tc_label_idx] \
+                if self.probe_tc_label_idx is not None \
+                else (tc_labels[:, 0] == tc_labels[:, 1]).long()
             assert len(tc_labels) == bsz, str(len(tc_labels))
             tc_labels = tc_labels.unsqueeze(-1).expand(-1, n_probes) # (bsz,) -> (bsz, L*4)
             probe_loss = loss_fct(probe_logits.reshape(-1, self.num_probe_labels), tc_labels.reshape(-1))
