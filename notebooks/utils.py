@@ -164,7 +164,7 @@ def get_matched_marker(token, is_marker=False): #, markers):
         return token2marker[token]
     return None
 
-def process_markers(tokens, pos_offset=0):
+def process_markers(tokens, tokenizer, pos_offset=0):
     out_tokens = []
     marked_positions = defaultdict(list)
     pos = 0
@@ -174,7 +174,8 @@ def process_markers(tokens, pos_offset=0):
             marked_positions[marker].append(pos + pos_offset)
         else:
             out_tokens.append(token)
-            pos += 1
+            if not (token.startswith("(") and token.endswith(")") and token not in tokenizer.all_special_tokens): # skip tags
+                pos += 1
     return out_tokens, dict(marked_positions) if marked_positions else None
 
 def process_mask(tokens, tokenizer): #, markers, marked_positions):
@@ -213,7 +214,7 @@ def convert_example_to_features(example, max_seq_length, tokenizer, max_noise_le
     tokens_a = example.tokens_a
     tokens_b = example.tokens_b
 
-    tokens_a, marked_positions = process_markers(tokens_a, pos_offset=1)
+    tokens_a, marked_positions = process_markers(tokens_a, tokenizer, pos_offset=1)
     if has_tags:
         tokens_a, t1_tag, tagged_tokens = process_tag(tokens_a, tokenizer)
         tag_ids = [-1] + t1_tag + [-1]
@@ -267,7 +268,7 @@ def convert_example_to_features(example, max_seq_length, tokenizer, max_noise_le
         if max_noise_len > 0:
             cur_pos_id += randint(0, max_noise_len)
 
-        tokens_b, t2_marked_positions = process_markers(tokens_b, pos_offset=len(tokens))
+        tokens_b, t2_marked_positions = process_markers(tokens_b, tokenizer, pos_offset=len(tokens))
         if marked_positions and t2_marked_positions:
             for marker in t2_marked_positions:
                 marked_positions[marker] += t2_marked_positions[marker]
@@ -327,6 +328,7 @@ def convert_example_to_features(example, max_seq_length, tokenizer, max_noise_le
     if marked_pos_labels is not None:
         # features.head_mask = marked_positions
         features.marked_pos_labels = marked_pos_labels
+        print(tokens[marked_pos_labels[1][1]])
     if example.guid <= -1:
         print('in convert_example_to_features: features.labels =', features.labels)
     return features

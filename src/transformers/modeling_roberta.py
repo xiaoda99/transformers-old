@@ -427,7 +427,7 @@ class RobertaForProbing(BertPreTrainedModel):  # XD
         self.probes = nn.ModuleDict()
         self.probe_tc_label_idx = 1
         self.num_probe_labels = 2
-        self.probe_type = 'per_head'
+        self.probe_type = 'accum'
         self.per_head_probe_pos = 'be1'  # 'mask'
         assert self.probe_type in ['accum', 'per_layer', 'per_head', 'per_head_src']
         self.probe_layers = list(range(10, 24))
