@@ -12,6 +12,7 @@ import numpy as np
 import torch
 from packaging import version
 from torch import nn
+from torch.nn import CrossEntropyLoss  # XD
 from torch.utils.data.dataloader import DataLoader
 from torch.utils.data.dataset import Dataset
 from torch.utils.data.distributed import DistributedSampler
@@ -720,30 +721,32 @@ class Trainer:
         else:
             if any('eval' in k for k in output.keys()) and hasattr(self.model, 'probe_layers'):  # XD
                 model = self.model
+                if not hasattr(self, 'history'): self.history = {}
                 print({k: v for k, v in output.items() if k in ['eval_loss', 'epoch']})
-                print('L\\', end='  ')
-                # if self.model.probe_type.startswith('per_head'):
-                #     for i in range(self.model.n_probe_positions):
-                #         print('%5d' % i, end='  ')
-                # else:
-                #     for k in self.model.probe_position_keys:
-                #         print('%5s' % k, end='  ')
+                # print('L\\', end='  ')
                 col_names = [str(i) for i in range(model.n_probe_positions)] \
                     if model.probe_type.startswith('per_head') else model.probe_position_keys
-                for col_name in col_names:
-                    print('%5s' % col_name, end='  ')
-                print()
+                # for col_name in col_names: print('%5s' % col_name, end='  ')
+                # print()
                 results = []
+                best_losses = []
                 for i, layer in enumerate(model.probe_layers):
-                    print('%2d' % layer, end='  ')
+                    # print('%2d' % layer, end='  ')
                     for j in range(model.n_probe_positions):
                         n = i * model.n_probe_positions + j
                         acc = output['eval_acc_tc' + str(n)]
+                        _loss = output['eval_ls_tc' + str(n)]
                         prob = get_mean_pred_prob(output['eval_stat_tc' + str(n)])
-                        print('%2d/%2d' % (acc * 100, prob * 100), end='  ')
-                        results.append([layer, col_names[j], acc, prob])
-                    print()
-                sorted_results = sorted(results, key=lambda x: x[-1], reverse=True)
+                        key = 'tc' + str(n)
+                        if key not in self.history or _loss < self.history[key][0]:
+                            self.history[key] = (_loss, acc, prob)
+                        best_loss, best_acc, best_prob = self.history[key]
+                        best_losses.append(best_loss)
+                        # print('%2d/%2d' % (best_acc * 100, best_prob * 100), end='  ')
+                        results.append([layer, col_names[j], best_acc, best_prob])
+                    # print()
+                print('best_loss:', sum(best_losses) / len(best_losses))
+                # sorted_results = sorted(results, key=lambda x: x[-1], reverse=True)
                 # for i, (layer, col_name, acc, prob) in enumerate(sorted_results):
                 #     if prob > 0.9 or i < 5:
                 #         print('%d-%s: %d/%d' % (layer, col_name, acc * 100, prob * 100))
@@ -1038,7 +1041,7 @@ class Trainer:
         from collections import defaultdict
         import torch.nn.functional as F
         accuracies, pred_probs = defaultdict(list), defaultdict(lambda: defaultdict(list))
-#         accuracies, pred_probs = [], defaultdict(list)
+        losses = defaultdict(list)
 
         if is_torch_tpu_available():
             dataloader = pl.ParallelLoader(dataloader, [self.args.device]).per_device_loader(self.args.device)
@@ -1061,6 +1064,8 @@ class Trainer:
                 probs = F.softmax(logits, dim=-1)
                 pred_labels = logits.argmax(dim=-1)
                 labels = labels.masked_select(masks).view(bsz, n_mask)
+                loss_fct = CrossEntropyLoss(reduction='none')
+                _losses = loss_fct(logits.view(-1, vocab_size), labels.view(-1)).view(bsz, n_mask)
                 for mask_id in range(n_mask):
                     if description == "Diagnostic Evaluation":
                         for input_ids, label, pred_label, prob in zip(inputs['input_ids'], labels[:, mask_id],
@@ -1069,8 +1074,10 @@ class Trainer:
                                 print(self.tokenizer.decode(input_ids), self.tokenizer._convert_id_to_token(label.item()),
                                     self.tokenizer._convert_id_to_token(pred_label.item()), round(prob[pred_label.item()].item(), 3))
                     acc = (pred_labels == labels)[:, mask_id].float().mean().item()
+                    _loss = _losses[:, mask_id].mean().item()
                     key = head_name + str(mask_id)
                     accuracies[key].append(acc)
+                    losses[key].append(_loss)
                     for i, pred_label_id in enumerate(pred_labels[:, mask_id]):
                         pred_probs[key][pred_label_id.item()].append(probs[i, mask_id, pred_label_id].item())
             logits, labels = None, None
@@ -1115,6 +1122,7 @@ class Trainer:
             # for mask_id in range(len(accuracies)):
             for key in accuracies:
                 metrics["acc_" + key] = np.mean(accuracies[key])
+                metrics["ls_" + key] = np.mean(losses[key])
                 total_preds = sum(len(probs) for probs in pred_probs[key].values())
                 s = ""
                 for pred_label_id, probs in sorted(pred_probs[key].items(), key=lambda x: x[0]):
@@ -1122,14 +1130,6 @@ class Trainer:
                         if 'tc' not in key else self.tokenizer.id2tag[pred_label_id]
                     s += "%s %.2f %.2f, " % (pred_token, len(probs) / total_preds, np.mean(probs))
                 metrics["stat_" + key] = s
-
-#             metrics["acc"] = np.mean(accuracies)
-#             total_preds = sum(len(probs) for probs in pred_probs.values())
-#             s = ""
-#             for pred_label_id, probs in sorted(pred_probs.items(), key=lambda x: x[0]):
-#                 pred_token = self.tokenizer._convert_id_to_token(pred_label_id)
-#                 s += "%s %.2f %.2f, " % (pred_token, len(probs) / total_preds, np.mean(probs))
-#             metrics["stat"] = s
 
         # Prefix all keys with eval_
         for key in list(metrics.keys()):

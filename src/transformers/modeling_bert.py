@@ -277,7 +277,9 @@ class BertSelfAttention(nn.Module):
         key_layer = self.transpose_for_scores(mixed_key_layer)
         value_layer = self.transpose_for_scores(mixed_value_layer)
         if hasattr(self, 'probe_positions') and self.probe_type == 'per_head_src':  # XD
+            # v = value_layer.permute(0, 2, 1, 3)
             hidden = get_probed_hidden_states(mixed_value_layer, self.probe_positions)
+            # self.hidden = hidden.squeeze(1)
             self.hidden = hidden.view(hidden.size(0), self.num_attention_heads, self.attention_head_size)
 
         # Take the dot product between "query" and "key" to get the raw attention scores.
@@ -427,6 +429,9 @@ class BertOutput(nn.Module):
 
     def forward(self, hidden_states, input_tensor):
         hidden_states = self.dense(hidden_states)
+        if hasattr(self, 'probe_positions'):  # XD
+            assert self.probe_type == 'per_layer_ffn'
+            self.hidden = get_probed_hidden_states(hidden_states, self.probe_positions)
         hidden_states = self.dropout(hidden_states)
         hidden_states = self.LayerNorm(hidden_states + input_tensor)
         return hidden_states
@@ -523,9 +528,13 @@ class BertEncoder(nn.Module):
             if output_hidden_states:
                 all_hidden_states = all_hidden_states + (hidden_states,)
             if i in getattr(self, 'probe_layers', []) and self.probe_type not in ['accum']:  # XD
-                module = layer_module.attention.self \
-                    if self.probe_type in ['per_head_src'] \
-                    else layer_module.attention.output
+                if self.probe_type in ['per_head_src']:
+                    module = layer_module.attention.self
+                elif self.probe_type in ['per_layer_ffn']:
+                    module = layer_module.output
+                else:
+                    assert self.probe_type in ['per_layer', 'per_head']
+                    module = layer_module.attention.output
                 module.probe_positions = self.probe_positions
                 module.probe_type = self.probe_type
 

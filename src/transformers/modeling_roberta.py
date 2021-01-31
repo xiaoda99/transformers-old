@@ -407,7 +407,9 @@ class Probe(nn.Module):  # XD
         # self.act_fn = nn.functional.relu
         # self.dropout = nn.Dropout(0.1)
         # self.dense1 = nn.Linear(hidden_size, output_size)
-        self.dense1 = nn.Linear(input_size, output_size)
+        self.dense1 = nn.Linear(input_size, output_size, bias=True)
+        # self.dense1.weight.data.zero_()
+        # self.dense1.bias.data.zero_()
 
     def forward(self, states):
         # states = self.dense0(states)
@@ -425,13 +427,14 @@ class RobertaForProbing(BertPreTrainedModel):  # XD
         self.lm_head = RobertaLMHead(config)
         # XD
         self.probes = nn.ModuleDict()
-        self.probe_tc_label_idx = 1
+        self.probe_tc_label_idx = None
         self.num_probe_labels = 2
         self.probe_type = 'accum'
-        self.per_head_probe_pos = 'be1'  # 'mask'
-        assert self.probe_type in ['accum', 'per_layer', 'per_head', 'per_head_src']
-        self.probe_layers = list(range(0, 24))
-        self.probe_position_keys = ['e0', 'e1', 'r0', 'r1', 'be0', 'be1', '?', ',', 'cls', 'sep', 'mask']
+        self.per_head_probe_pos = 'r1'  # 'mask'
+        assert self.probe_type in ['accum', 'per_layer', 'per_layer_ffn', 'per_head', 'per_head_src']
+        self.probe_layers = list(range(12, 24))
+        self.probe_position_keys = ['be1', ',', 'mask']
+        # self.probe_position_keys = ['e0', 'e1', 'r0', 'r1', 'be0', 'be1', '?', ',', 'mask']
         self.n_probe_positions = self.config.num_attention_heads \
             if self.probe_type.startswith('per_head') else len(self.probe_position_keys)
         for i in self.probe_layers:
@@ -455,19 +458,15 @@ class RobertaForProbing(BertPreTrainedModel):  # XD
                 output_attentions=None, output_hidden_states=None,
                 return_dict=None, **kwargs):
         return_dict = return_dict if return_dict is not None else self.config.use_return_dict
-
         # XD
         positions = {}
         assert marked_pos_labels.size(1) == 2 and marked_pos_labels.size(2) == 2, str(marked_pos_labels.size())
-        # positions['mark0'] = marked_pos_labels[:, self.probe_tc_label_idx, :1]  # (bsz, 2, 2) -> (bsz, 1)
-        # positions['mark1'] = marked_pos_labels[:, self.probe_tc_label_idx, 1:]  # (bsz, 2, 2) -> (bsz, 1)
         positions['e0'] = marked_pos_labels[:, 0, :1]  # (bsz, 2, 2) -> (bsz, 1)
         positions['e1'] = marked_pos_labels[:, 0, 1:]  # (bsz, 2, 2) -> (bsz, 1)
         positions['r0'] = marked_pos_labels[:, 1, :1]  # (bsz, 2, 2) -> (bsz, 1)
         positions['r1'] = marked_pos_labels[:, 1, 1:]  # (bsz, 2, 2) -> (bsz, 1)
         positions['cls'] = (input_ids == self.tokenizer.cls_token_id).nonzero()[:, 1:]
         positions['sep'] = (input_ids == self.tokenizer.sep_token_id).nonzero()[:, 1:]
-        # be_positions = torch.ones_like(cls_positions) * 2
         be0_pos, be1_pos = (input_ids == self.tokenizer._convert_token_to_id('Ġis')).nonzero() \
             .view(input_ids.size(0), 2, -1).chunk(2, dim=1)
         positions['be0'], positions['be1'] = be0_pos[:, 0, 1:], be1_pos[:, 0, 1:]
