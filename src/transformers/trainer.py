@@ -722,16 +722,18 @@ class Trainer:
             if any('eval' in k for k in output.keys()) and hasattr(self.model, 'probe_layers'):  # XD
                 model = self.model
                 if not hasattr(self, 'history'): self.history = {}
-                print({k: v for k, v in output.items() if k in ['eval_loss', 'epoch']})
-                # print('L\\', end='  ')
+                p = output['step'] % self.args.verbose_eval_steps == 0
+                # if p: print({k: v for k, v in output.items() if k in ['eval_loss', 'epoch']})
+                if p: print('L\\', end='  ')
                 col_names = [str(i) for i in range(model.n_probe_positions)] \
                     if model.probe_type.startswith('per_head') else model.probe_position_keys
-                # for col_name in col_names: print('%5s' % col_name, end='  ')
-                # print()
+                for col_name in col_names:
+                    if p: print('%5s' % col_name, end='  ')
+                if p: print()
                 results = []
                 best_losses = []
                 for i, layer in enumerate(model.probe_layers):
-                    # print('%2d' % layer, end='  ')
+                    if p: print('%2d' % layer, end='  ')
                     for j in range(model.n_probe_positions):
                         n = i * model.n_probe_positions + j
                         acc = output['eval_acc_tc' + str(n)]
@@ -742,10 +744,10 @@ class Trainer:
                             self.history[key] = (_loss, acc, prob)
                         best_loss, best_acc, best_prob = self.history[key]
                         best_losses.append(best_loss)
-                        # print('%2d/%2d' % (best_acc * 100, best_prob * 100), end='  ')
+                        if p: print('%2d/%2d' % (best_acc * 100, best_prob * 100), end='  ')
                         results.append([layer, col_names[j], best_acc, best_prob])
-                    # print()
-                print('best_loss:', sum(best_losses) / len(best_losses))
+                    if p: print()
+                print('best_loss: %.4f  epoch: %d' % (sum(best_losses) / len(best_losses), output['epoch']))
                 # sorted_results = sorted(results, key=lambda x: x[-1], reverse=True)
                 # for i, (layer, col_name, acc, prob) in enumerate(sorted_results):
                 #     if prob > 0.9 or i < 5:
