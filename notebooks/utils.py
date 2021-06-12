@@ -499,7 +499,7 @@ def plot_head_attn(attn, tokens, ax1=None, marked_positions=[]):
     plt.show()
 
 def normalize_tokens(tokens):
-    return ['@' + token if not token.startswith('Ġ') and token not in ['<s>', '</s>', '<mask>', ',', '.', '?']
+    return ['_' + token if not token.startswith('Ġ') and token not in ['<s>', '</s>', '<mask>', ',', '.', '?']
             else token.replace('Ġ', '').replace('<mask>', '_')
             for token in tokens]
 

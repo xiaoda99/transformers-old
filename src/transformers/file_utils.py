@@ -824,6 +824,16 @@ def get_from_cache(
     # From now on, etag is not None.
     if os.path.exists(cache_path) and not force_download:
         return cache_path
+    # XD get plaintext symlink path
+    url_parts = url.split('/')
+    plaintext_filename = url_parts[-1]
+    main_bodies = ['pytorch', 'config', 'vocab', 'merges']
+    assert any(s in plaintext_filename for s in main_bodies), plaintext_filename
+    if any(plaintext_filename.startswith(s) for s in main_bodies):
+        assert 'resolve' in url_parts # https://huggingface.co/t5-large/resolve/main/pytorch_model.bin
+        plaintext_filename = url_parts[url_parts.index('resolve') - 1] + '-' + plaintext_filename
+    link_path = os.path.join(cache_dir, plaintext_filename)
+    if os.path.exists(link_path): return link_path
 
     # Prevent parallel downloads of the same file with a lock.
     lock_path = cache_path + ".lock"

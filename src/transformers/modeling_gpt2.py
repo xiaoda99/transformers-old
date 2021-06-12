@@ -233,14 +233,15 @@ class Attention(nn.Module):
         else:
             present = (None,)
 
-        attn_outputs = self._attn(query, key, value, attention_mask, head_mask, output_attentions)
+        attn_outputs = self._attn(query, key, value, attention_mask, head_mask, output_attentions) \
+            if output_attentions or not hasattr(self, 'w') or self.w is None else (torch.matmul(self.w, value), )  # XD: for attattr
         a = attn_outputs[0]
 
         a = self.merge_heads(a)
         a = self.c_proj(a)
         a = self.resid_dropout(a)
 
-        outputs = [a, present] + attn_outputs[1:]
+        outputs = [a, present] + list(attn_outputs[1:])  # XD: 4.2 use tuples, so a conversion is needed
         return outputs  # a, present, (attentions)
 
 
@@ -629,7 +630,8 @@ class GPT2Model(GPT2PreTrainedModel):
 
         hidden_states = self.ln_f(hidden_states)
 
-        hidden_states = hidden_states.view(*output_shape)
+        if output_shape[0] != 1 or hidden_states.size(0) == output_shape[0]:  # XD: for attattr
+            hidden_states = hidden_states.view(*output_shape)
         # Add last hidden state
         if output_hidden_states:
             all_hidden_states = all_hidden_states + (hidden_states,)

@@ -246,10 +246,10 @@ class BertSelfAttention(nn.Module):
 
         self.dropout = nn.Dropout(config.attention_probs_dropout_prob)
 
-    def transpose_for_scores(self, x):
+    def transpose_for_scores(self, x, return_norm=False):  # XD
         new_x_shape = x.size()[:-1] + (self.num_attention_heads, self.attention_head_size)
         x = x.view(*new_x_shape)
-        return x.permute(0, 2, 1, 3)
+        return x.permute(0, 2, 1, 3) if not return_norm else (x.permute(0, 2, 1, 3), x.norm(dim=-1))  # XD
 
     def forward(
         self,
@@ -275,7 +275,9 @@ class BertSelfAttention(nn.Module):
 
         query_layer = self.transpose_for_scores(mixed_query_layer)
         key_layer = self.transpose_for_scores(mixed_key_layer)
-        value_layer = self.transpose_for_scores(mixed_value_layer)
+        value_layer, self.value_norm = self.transpose_for_scores(mixed_value_layer, return_norm=True) # XD
+        self.value_layer = value_layer  # XD
+
         if hasattr(self, 'probe_positions') and self.probe_type == 'per_head_src':  # XD
             # v = value_layer.permute(0, 2, 1, 3)
             hidden = get_probed_hidden_states(mixed_value_layer, self.probe_positions)
@@ -314,8 +316,10 @@ class BertSelfAttention(nn.Module):
         context_layer = torch.matmul(attention_probs, value_layer)
 
         context_layer = context_layer.permute(0, 2, 1, 3).contiguous()
+        self.context_norm = context_layer.norm(dim=-1)  # XD (bsz, qlen, H)
         new_context_layer_shape = context_layer.size()[:-2] + (self.all_head_size,)
         context_layer = context_layer.view(*new_context_layer_shape)
+        self.context_layer = self.transpose_for_scores(context_layer)  # XD
         if getattr(self, 'output_weighted_values', False):  # XD
             # (b, H, qlen, klen, 1) * (b, H, 1, klen, d_head) -> (b, H, qlen, klen, d_head)
             weighted_values = attention_probs.unsqueeze(-1) * value_layer.unsqueeze(2)

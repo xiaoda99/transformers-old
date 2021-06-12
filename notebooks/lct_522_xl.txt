@@ -1,0 +1,152 @@
++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+gpt2-xl
+115
+2021-05-24 01:24:24
+0
+**line number: 4
+t z l r -> t z l r t z l r
+o e o e -> o e o e o e o e
+c d t -> c d t c d t
+x d u -> x d u x d u
+k v o -> k v o k v o
+
+right::: k v o -> k v o k v o
+right
+H K G -> H K G H K G
+X R H F -> X R H F X R H F
+Y I C Q O -> Y I C Q O Y I C Q O
+T V G I G -> T V G I G T V G I G
+W V Y -> W V Y W V Y
+
+right::: W V Y -> W V Y W V Y
+right
+c k q g o -> c k q g o c k q g o
+c f d p r -> c f d p r c f d p r
+d r d -> d r d d r d
+e h s x l -> e h s x l e h s x l
+i f g t -> i f g t i f g t
+
+right::: i f g t -> i f g t i f g t
+right
+1 4 4 2 1 -> 1 4 4 2 1 1 4 4 2 1
+8 8 6 -> 8 8 6 8 8 6
+2 5 0 -> 2 5 0 2 5 0
+1 1 3 -> 1 1 3 1 1 3
+9 3 2 4 0 -> 9 3 2 4 0 9 3 2 4 0
+
+right::: 9 3 2 4 0 -> 9 3 2 4 0 9 3 2 4 0
+right
+@@@@@@@@@@@@ 4 @@@@@@@@@@@@
+###  [[['digits', 'lower', 'upper'], 3, 5], ['find_all', 'repeat_fragment'], 4]
+==========================================================================
+1
+**line number: 4
+a e R a U -> A E R A U
+I s r Q -> I S R Q
+c f g U t -> C F G U T
+y K f -> Y K F
+x X t g c -> x X t g c
+
+right::: x X t g c -> X X T G C
+false
+u i R A T -> U I R A T
+M o P -> M O P
+l u O -> L U O
+E e v b -> E E V B
+N v G -> N V G
+
+right::: N v G -> N V G
+right
+P E T v -> P E T V
+b W D Z S -> B W D Z S
+w G k M f -> W G K M F
+d w n F -> D W N F
+q A Y -> Q A Y
+
+right::: q A Y -> Q A Y
+right
+N q L -> N Q L
+y h Q z -> Y H Q Z
+q l G n s -> Q L G N S
+I m C E Z -> I M C E Z
+d m G -> D M G
+
+right::: d m G -> D M G
+right
+g B G -> G B G
+a g x Q u -> A G X Q U
+K l g -> K L G
+L G o V g -> L G O V G
+n W f -> N W F
+
+right::: n W f -> N W F
+right
+@@@@@@@@@@@@ 4 @@@@@@@@@@@@
+###  [[['lower+upper'], 3, 5], ['find_lower_letters', 'to_uppercase'], 4]
+==========================================================================
+2
+**line number: 4
+U g P p F -> U G P p F
+T S s e r -> T S S e r
+P k B R W -> P K B R W
+C k N L -> C K N L
+V b e D b -> V b e D b
+
+right::: V b e D b -> V B e D b
+false
+b d S -> B d S
+O G M h -> O G M H
+q O M d B -> Q O M d B
+x s r E m -> X s r E m
+F G N i R -> F G N i R
+
+right::: F G N i R -> F G N I R
+false
+**line number: 8
+U g P p F -> U G P p F
+T S s e r -> T S S e r
+P k B R W -> P K B R W
+C k N L -> C K N L
+V p z -> V P z
+a f C d Q -> A f C d Q
+M O p m Y -> M O P m Y
+o L y k S -> O L y k S
+V b e D b -> V b e D b
+
+right::: V b e D b -> V B e D b
+false
+b d S -> B d S
+O G M h -> O G M H
+q O M d B -> Q O M d B
+x s r E m -> X s r E m
+u h G E t -> U h G E t
+L D r N P -> L D R N P
+a U W S D -> A U W S D
+y H v K -> Y H v K
+F G N i R -> F G N i R
+
+right::: F G N i R -> F G N I R
+false
+**line number: 16
+U g P p F -> U G P p F
+T S s e r -> T S S e r
+P k B R W -> P K B R W
+C k N L -> C K N L
+V p z -> V P z
+a f C d Q -> A f C d Q
+M O p m Y -> M O P m Y
+o L y k S -> O L y k S
+b k g m L -> B k g m L
+e G l M -> E G l M
+x H r I -> X H r I
+e E d G -> E E d G
+o L T -> O L T
+b N U -> B N U
+f h E c p -> F h E c p
+D X g R Z -> D X G R Z
+V b e D b -> V b e D b
+
+right::: V b e D b -> V B e D b
+false
